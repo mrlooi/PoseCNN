@@ -67,8 +67,29 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def get_lov2d_args():
+    class Args():
+        pass
+
+    args = Args()
+    args.gpu_id = 0
+    args.weights = "data/imagenet_models/vgg16.npy"
+    args.model = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
+    args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
+    args.wait = True
+    args.imdb_name = "lov_keyframe"
+    args.network_name = "vgg16_convs"
+    args.rig_name = "data/LOV/camera.json"
+    args.cad_name = "data/LOV/models.txt"
+    args.kfusion = False
+    args.pose_name = "data/LOV/poses.txt"
+    args.background_name = "data/cache/backgrounds.pkl"
+
+    return args
+
 if __name__ == '__main__':
-    args = parse_args()
+    # args = parse_args()
+    args = get_lov2d_args()
 
     print('Called with args:')
     print(args)
