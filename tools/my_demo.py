@@ -92,8 +92,6 @@ def _extract_vertmap(labels, vertex_pred, num_classes):
         if len(I[0]) > 0:
             start = 3 * i
             end = 3 * i + 3
-            print(start)
-            print(end)
             vertmap[I[0], I[1], :] = vertex_pred[I[0], I[1], start:end]
     vertmap[:, :, 2] = np.exp(vertmap[:, :, 2])
     return vertmap
@@ -209,7 +207,8 @@ if __name__ == '__main__':
 
     # construct meta data
     K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
-    meta_data = dict({'intrinsic_matrix': K, 'factor_depth': 10000.0})
+    factor_depth = 10000.0
+    meta_data = dict({'intrinsic_matrix': K, 'factor_depth': factor_depth})
     print (meta_data)
 
     from networks.factory import get_network
@@ -224,17 +223,13 @@ if __name__ == '__main__':
     saver.restore(sess, args.model)
     print ('Loading model weights from {:s}').format(args.model)
 
-    # START
-    idx = 0
-    im = pad_im(cv2.imread(rgb_filenames[idx], cv2.IMREAD_UNCHANGED), 16)
-
-    im_blob, im_rescale_blob, im_scale_factors = _get_image_blob(im)
-    im_scale = im_scale_factors[0]
-
+    # variables
     extents = imdb._extents
     points = imdb._points_all
     symmetry = imdb._symmetry
     num_classes = imdb.num_classes
+
+    im_scale = cfg.TEST.SCALES_BASE[0]
 
     K = np.matrix(meta_data['intrinsic_matrix']) * im_scale
     K[2, 2] = 1
@@ -256,75 +251,82 @@ if __name__ == '__main__':
         mdata[11] = -1 * mdata[11]
     print(meta_data)
 
-    meta_data_blob = np.zeros((1, 1, 1, 48), dtype=np.float32)
-    meta_data_blob[0,0,0,:] = mdata
+    # START
+    for idx in range(len(rgb_filenames)):
+        im = pad_im(cv2.imread(rgb_filenames[idx], cv2.IMREAD_UNCHANGED), 16)
 
-    height = int(im.shape[0] * im_scale)
-    width = int(im.shape[1] * im_scale)
-    label_blob = np.ones((1, height, width), dtype=np.int32)
-    vertex_target_blob = np.zeros((1, height, width, 3*num_classes), dtype=np.float32)
-    vertex_weight_blob = np.zeros((1, height, width, 3*num_classes), dtype=np.float32)
-    pose_blob = np.zeros((1, 13), dtype=np.float32)
+        im_blob, im_rescale_blob, im_scale_factors = _get_image_blob(im)
+
+        meta_data_blob = np.zeros((1, 1, 1, 48), dtype=np.float32)
+        meta_data_blob[0,0,0,:] = mdata
+
+        height = int(im.shape[0] * im_scale)
+        width = int(im.shape[1] * im_scale)
+        label_blob = np.ones((1, height, width), dtype=np.int32)
+        vertex_target_blob = np.zeros((1, height, width, 3*num_classes), dtype=np.float32)
+        vertex_weight_blob = np.zeros((1, height, width, 3*num_classes), dtype=np.float32)
+        pose_blob = np.zeros((1, 13), dtype=np.float32)
 
 
-    feed_dict = {net.data: im_blob, net.gt_label_2d: label_blob, net.keep_prob: 1.0, \
-                 net.vertex_targets: vertex_target_blob, net.vertex_weights: vertex_weight_blob, \
-                 net.meta_data: meta_data_blob, net.extents: extents, net.points: points, net.symmetry: symmetry, net.poses: pose_blob}
+        feed_dict = {net.data: im_blob, net.gt_label_2d: label_blob, net.keep_prob: 1.0, \
+                     net.vertex_targets: vertex_target_blob, net.vertex_weights: vertex_weight_blob, \
+                     net.meta_data: meta_data_blob, net.extents: extents, net.points: points, net.symmetry: symmetry, net.poses: pose_blob}
 
-    sess.run(net.enqueue_op, feed_dict=feed_dict)
+        sess.run(net.enqueue_op, feed_dict=feed_dict)
 
-    labels_2d, probs, vertex_pred, rois, poses_init, poses_pred = \
-        sess.run([net.get_output('label_2d'), net.get_output('prob_normalized'), net.get_output('vertex_pred'), \
-                  net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh')])
+        labels_2d, probs, vertex_pred, rois, poses_init, poses_pred = \
+            sess.run([net.get_output('label_2d'), net.get_output('prob_normalized'), net.get_output('vertex_pred'), \
+                      net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh')])
 
-    # non-maximum suppression
-    from utils.nms import nms
+        # non-maximum suppression
+        from utils.nms import nms
 
-    keep = nms(rois, 0.5)
-    rois = rois[keep, :]
-    poses_init = poses_init[keep, :]
-    poses_pred = poses_pred[keep, :]
-    print keep
-    print rois
+        keep = nms(rois, 0.5)
+        rois = rois[keep, :]
+        poses_init = poses_init[keep, :]
+        poses_pred = poses_pred[keep, :]
+        # print keep
+        # print rois
 
-    # combine poses
-    poses = poses_init
-    for i in xrange(rois.shape[0]):
-        class_id = int(rois[i, 1])
-        if class_id >= 0:
-            poses[i, :4] = poses_pred[i, 4*class_id:4*class_id+4]
+        # combine poses
+        poses = poses_init
+        for i in xrange(rois.shape[0]):
+            class_id = int(rois[i, 1])
+            if class_id >= 0:
+                poses[i, :4] = poses_pred[i, 4*class_id:4*class_id+4]
 
-    vertex_pred = vertex_pred[0, :, :, :]
+        vertex_pred = vertex_pred[0, :, :, :]
 
-    labels = labels_2d[0,:,:].astype(np.int32)
-    probs = probs[0,:,:,:]
+        labels = labels_2d[0,:,:].astype(np.int32)
+        probs = probs[0,:,:,:]
 
-    labels = unpad_im(labels, 16)
-    roi_classes = [imdb._classes[int(c)] for c in rois[:,1]]
+        labels = unpad_im(labels, 16)
+        roi_classes = [imdb._classes[int(c)] for c in rois[:,1]]
 
-    # build the label image
-    im_label = imdb.labels_to_image(im, labels)
+        # build the label image
+        im_label = imdb.labels_to_image(im, labels)
 
-    labels_new = cv2.resize(labels, None, None, fx=1.0/im_scale, fy=1.0/im_scale, interpolation=cv2.INTER_NEAREST)
+        labels_new = cv2.resize(labels, None, None, fx=1.0/im_scale, fy=1.0/im_scale, interpolation=cv2.INTER_NEAREST)
 
-    pose_data = [{"name": roi_classes[ix], "pose": p.tolist()} for ix, p in enumerate(poses)]
+        pose_data = [{"name": roi_classes[ix], "pose": p.tolist()} for ix, p in enumerate(poses)]
 
-    SAVE = True
-    if SAVE:
-        import json
-        j_file = rgb_filenames[idx].replace("color.png", "pred_pose.json")
-        with open(j_file, "w") as f:
-            json.dump(pose_data, f)
-            print("Saved pose data to %s"%(j_file))
+        SAVE = True
+        if SAVE:
+            import json
+            j_file = rgb_filenames[idx].replace("color.png", "pred_pose.json")
+            with open(j_file, "w") as f:
+                j_data = {"poses": pose_data, "meta": {'intrinsic_matrix': K.tolist(), 'factor_depth': factor_depth}}
+                json.dump(j_data, f)
+                print("Saved pose data to %s"%(j_file))
 
-    if cfg.TEST.VISUALIZE:
-        im_depth = pad_im(cv2.imread(depth_filenames[idx], cv2.IMREAD_UNCHANGED), 16)
+        if cfg.TEST.VISUALIZE:
+            im_depth = pad_im(cv2.imread(depth_filenames[idx], cv2.IMREAD_UNCHANGED), 16)
 
-        vertmap = _extract_vertmap(labels, vertex_pred, num_classes)
-        vis_segmentations_vertmaps_detection(im, im_depth, im_label, imdb._class_colors, vertmap, 
-            labels, rois, poses, meta_data['intrinsic_matrix'], imdb.num_classes, imdb._classes, imdb._points_all)
-        # from tools.open3d_test2 import render_object_pose
-        # object_model_dir = osp.join(imdb._get_default_path(), "models")
-        # print(pose_data)
-        # render_object_pose(im, im_depth, meta_data, pose_data, object_model_dir)
-    
+            vertmap = _extract_vertmap(labels, vertex_pred, num_classes)
+            vis_segmentations_vertmaps_detection(im, im_depth, im_label, imdb._class_colors, vertmap, 
+                labels, rois, poses, meta_data['intrinsic_matrix'], imdb.num_classes, imdb._classes, imdb._points_all)
+            # from tools.open3d_test2 import render_object_pose
+            # object_model_dir = osp.join(imdb._get_default_path(), "models")
+            # print(pose_data)
+            # render_object_pose(im, im_depth, meta_data, pose_data, object_model_dir)
+        

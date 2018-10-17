@@ -106,7 +106,7 @@ if __name__ == '__main__':
     import sys        
     import cv2
     import json
-    import tensorflow.contrib.slim as slim  # SEGFAULTS when used with open3d AND cv2
+    # import tensorflow.contrib.slim as slim  # SEGFAULTS when used with open3d AND cv2
 
     root_data_dir = "./data"
     rgb_file = osp.join(root_data_dir, "demo_images/000001-color.png")
@@ -126,10 +126,12 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # construct meta data
-    K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
-    meta_data = dict({'intrinsic_matrix': K, 'factor_depth': 10000.0})
+    # K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
+    # meta_data = dict({'intrinsic_matrix': K, 'factor_depth': 10000.0})
 
     with open(pose_file, 'r') as f: 
-        pose_data = json.load(f)
+        j_data = json.load(f)
+        pose_data = j_data['poses']
+        meta_data = j_data['meta']
 
     render_object_pose(rgb, depth, meta_data, pose_data, object_model_dir)
