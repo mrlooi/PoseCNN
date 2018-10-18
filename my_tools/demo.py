@@ -85,13 +85,14 @@ def _get_image_blob(im):
 
 def get_network():
     from model import vgg16_convs
-    return vgg16_convs(cfg.INPUT, cfg.TRAIN.NUM_CLASSES, cfg.TRAIN.NUM_UNITS, cfg.TRAIN.SCALES_BASE, \
+    return vgg16_convs(cfg.TRAIN.NUM_CLASSES, cfg.TRAIN.NUM_UNITS, \
                                                      cfg.TRAIN.THRESHOLD_LABEL, cfg.TRAIN.VOTING_THRESHOLD, \
-                                                     cfg.TRAIN.VERTEX_REG_2D, cfg.TRAIN.VERTEX_REG_3D, \
+                                                     cfg.TRAIN.VERTEX_REG_2D, \
                                                      cfg.TRAIN.POSE_REG, cfg.TRAIN.ADAPT, cfg.TRAIN.TRAINABLE, cfg.IS_TRAIN)
 
 if __name__ == '__main__':
     # import pprint
+    from utils.nms import nms
 
     args = get_lov2d_args()
     # print(args)
@@ -187,7 +188,6 @@ if __name__ == '__main__':
                       net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh')])
 
         # non-maximum suppression
-        from utils.nms import nms
 
         keep = nms(rois, 0.5)
         rois = rois[keep, :]
