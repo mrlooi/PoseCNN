@@ -16,4 +16,4 @@ ros/devel/*
 images/*
 
 data/*
-*/build/
+build

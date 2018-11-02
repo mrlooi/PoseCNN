@@ -5,7 +5,7 @@ import _init_paths
 from network import Network
 
 class vgg16_convs(Network):
-    def __init__(self, num_classes, num_units, threshold_label, vote_threshold, vertex_reg_2d=False, pose_reg=False, adaptation=False, trainable=True, is_train=True):
+    def __init__(self, num_classes, num_units, threshold_label, vote_threshold, vertex_reg_2d=False, pose_reg=False, trainable=True, is_train=True):
         self.inputs = []
         self.num_classes = num_classes
         self.num_units = num_units
@@ -14,20 +14,23 @@ class vgg16_convs(Network):
         self.vertex_reg_2d = vertex_reg_2d
         self.vertex_reg = vertex_reg_2d
         self.pose_reg = pose_reg
-        self.adaptation = adaptation
+        # self.adaptation = adaptation
         self.trainable = trainable
+
+        self.is_train = int(is_train)
+        self.skip_pixels = 20
+        self.vote_threshold = vote_threshold
+        self.vote_percentage = 0.02
         # if vote_threshold < 0, only detect single instance (default). 
         # Otherwise, multiple instances are detected if hough voting score larger than the threshold
-        if is_train:
-            self.is_train = 1
-            self.skip_pixels = 10
-            self.vote_threshold = vote_threshold
-            self.vote_percentage = 0.02
-        else:
-            self.is_train = 0
-            self.skip_pixels = 10
-            self.vote_threshold = vote_threshold
-            self.vote_percentage = 0.02
+        # if is_train:
+        #     self.skip_pixels = 10
+        #     self.vote_threshold = vote_threshold
+        #     self.vote_percentage = 0.02
+        # else:
+        #     self.skip_pixels = 10
+        #     self.vote_threshold = vote_threshold
+        #     self.vote_percentage = 0.02
 
         self.data = tf.placeholder(tf.float32, shape=[None, None, None, 3])
         self.gt_label_2d = tf.placeholder(tf.int32, shape=[None, None, None])
@@ -79,12 +82,12 @@ class vgg16_convs(Network):
              .conv(3, 3, 512, 1, 1, name='conv5_2', c_i=512, trainable=self.trainable)
              .conv(3, 3, 512, 1, 1, name='conv5_3', c_i=512, trainable=self.trainable))
 
+        (self.feed('conv4_3')
+             .conv(1, 1, self.num_units, 1, 1, name='score_conv4', c_i=512))
+
         (self.feed('conv5_3')
              .conv(1, 1, self.num_units, 1, 1, name='score_conv5', c_i=512)
              .deconv(4, 4, self.num_units, 2, 2, name='upscore_conv5', trainable=False))
-
-        (self.feed('conv4_3')
-             .conv(1, 1, self.num_units, 1, 1, name='score_conv4', c_i=512))
 
         (self.feed('score_conv4', 'upscore_conv5')
              .add(name='add_score')
@@ -96,19 +99,20 @@ class vgg16_convs(Network):
              .log_softmax_high_dimension(self.num_classes, name='prob'))
 
         (self.feed('score')
-             .softmax_high_dimension(self.num_classes, name='prob_normalized')
+             # .softmax_high_dimension(self.num_classes, name='prob_normalized')
+             .softmax(3, name='prob_normalized')
              .argmax_2d(name='label_2d'))
 
         (self.feed('prob_normalized', 'gt_label_2d')
              .hard_label(threshold=self.threshold_label, name='gt_label_weight'))
 
         if self.vertex_reg:
+            (self.feed('conv4_3')
+                 .conv(1, 1, 128, 1, 1, name='score_conv4_vertex', relu=False, c_i=512))
+
             (self.feed('conv5_3')
                  .conv(1, 1, 128, 1, 1, name='score_conv5_vertex', relu=False, c_i=512)
                  .deconv(4, 4, 128, 2, 2, name='upscore_conv5_vertex', trainable=False))
-
-            (self.feed('conv4_3')
-                 .conv(1, 1, 128, 1, 1, name='score_conv4_vertex', relu=False, c_i=512))
             
             (self.feed('score_conv4_vertex', 'upscore_conv5_vertex')
                  .add(name='add_score_vertex')
@@ -120,23 +124,23 @@ class vgg16_convs(Network):
             (self.feed('label_2d', 'vertex_pred', 'extents', 'meta_data', 'poses')
                  .hough_voting_gpu(self.is_train, self.vote_threshold, self.vote_percentage, self.skip_pixels, name='hough'))
 
-            self.layers['rois'] = self.get_output('hough')[0]
-            self.layers['poses_init'] = self.get_output('hough')[1]
-            self.layers['poses_target'] = self.get_output('hough')[2]
-            self.layers['poses_weight'] = self.get_output('hough')[3]
+            rois, poses_init, poses_target, poses_weight = self.get_output('hough')[:4]
+            self.layers['rois'] = rois
+            self.layers['poses_init'] = poses_init
+            self.layers['poses_target'] = poses_target
+            self.layers['poses_weight'] = poses_weight
             
             if self.pose_reg:
                 # roi pooling without masking
                 (self.feed('conv5_3', 'rois')
-                     .roi_pool(7, 7, 1.0 / 16.0, 0, name='pool5'))
-                     #.crop_pool_new(16.0, pool_size=7, name='pool5'))
+                     .roi_pool(7, 7, 1.0 / 16.0, 0, name='roi_pool1'))
+                     #.crop_pool_new(16.0, pool_size=7, name='roi_pool1'))
                      
                 (self.feed('conv4_3', 'rois')
-                     .roi_pool(7, 7, 1.0 / 8.0, 0, name='pool4'))
-                     #.crop_pool_new(8.0, pool_size=7, name='pool4'))
+                     .roi_pool(7, 7, 1.0 / 8.0, 0, name='roi_pool2'))
+                     #.crop_pool_new(8.0, pool_size=7, name='roi_pool2'))
 
-
-                (self.feed('pool5', 'pool4')
+                (self.feed('roi_pool1', 'roi_pool2')
                      .add(name='pool_score')
                      .fc(4096, height=7, width=7, channel=512, name='fc6')
                      .dropout(self.keep_prob_queue, name='drop6')
@@ -152,21 +156,10 @@ class vgg16_convs(Network):
                 (self.feed('poses_pred', 'poses_target', 'poses_weight', 'points', 'symmetry')
                      .average_distance_loss(margin=0.01, name='loss_pose'))
 
-                # domain adaptation
-                if self.adaptation:
-                    self.layers['label_domain'] = self.get_output('hough')[4]
-
-                    (self.feed('pool_score')
-                         .gradient_reversal(0.01, name='greversal')
-                         .fc(256, height=7, width=7, channel=512, name='fc9')
-                         .dropout(self.keep_prob_queue, name='drop9') 
-                         .fc(2, name='domain_score')
-                         .softmax(-1, name='domain_prob')
-                         .argmax(-1, name='domain_label'))
-
 if __name__ == '__main__':
     # from fcn.config import cfg
 
+    model_file = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
     num_classes = 22
     num_units = 64
     threshold_label = 1.0
@@ -174,8 +167,20 @@ if __name__ == '__main__':
     vertex_reg_2d = True
     # vertex_reg_3d = False
     pose_reg = True
-    adapt = False
+    # adapt = False
     trainable = False
     is_train = False
-    net = vgg16_convs(num_classes, num_units, threshold_label, voting_threshold, vertex_reg_2d, pose_reg, adapt, trainable, is_train)
+    net = vgg16_convs(num_classes, num_units, threshold_label, voting_threshold, vertex_reg_2d, pose_reg, trainable, is_train)
+
+    # saver = tf.train.Saver()
+    # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
+    # sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options))
+    # saver.restore(sess, model_file)
+
+    # img_file = "data/demo_images/000001-color.png"
+    # depth_file = "data/demo_images/000001-depth.png"
+
+    # pose_blob = np.zeros((1, 13), dtype=np.float32)
+    # im = cv2.imread(img_file, cv2.IMREAD_UNCHANGED)
+    # im_blob = np.expand_dims(im, 0)
 

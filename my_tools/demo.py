@@ -52,9 +52,7 @@ def get_lov2d_args():
 
     return args
 
-def _get_image_blob(im):
-
-    assert len(cfg.TEST.SCALES_BASE) == 1
+def _get_image_blob(im, im_scale=1, PIXEL_MEANS=None):
     
     im_orig = im.astype(np.float32, copy=True)
     # # mask the color image according to depth
@@ -63,11 +61,11 @@ def _get_image_blob(im):
     #     im_orig[I[0], I[1], :] = 0
 
     processed_ims_rescale = []
-    im_scale = cfg.TEST.SCALES_BASE[0]
     im_rescale = cv2.resize(im_orig / 127.5 - 1, None, None, fx=im_scale, fy=im_scale, interpolation=cv2.INTER_LINEAR)
     processed_ims_rescale.append(im_rescale)
 
-    im_orig -= cfg.PIXEL_MEANS
+    if PIXEL_MEANS is not None:
+        im_orig -= PIXEL_MEANS
     processed_ims = []
     im_scale_factors = []
     
@@ -88,7 +86,7 @@ def get_network():
     return vgg16_convs(cfg.TRAIN.NUM_CLASSES, cfg.TRAIN.NUM_UNITS, \
                                                      cfg.TRAIN.THRESHOLD_LABEL, cfg.TRAIN.VOTING_THRESHOLD, \
                                                      cfg.TRAIN.VERTEX_REG_2D, \
-                                                     cfg.TRAIN.POSE_REG, cfg.TRAIN.ADAPT, cfg.TRAIN.TRAINABLE, cfg.IS_TRAIN)
+                                                     cfg.TRAIN.POSE_REG, cfg.TRAIN.TRAINABLE, cfg.IS_TRAIN)
 
 if __name__ == '__main__':
     # import pprint
@@ -105,9 +103,9 @@ if __name__ == '__main__':
     imdb = get_imdb(args.imdb_name)
 
     # construct the filenames
-    root = 'data/demo_images/'
-    rgb_filenames = sorted([root + f for f in os.listdir(root) if f.endswith("color.png")])
-    depth_filenames = sorted([root + f for f in os.listdir(root) if f.endswith("depth.png")])
+    demo_dir = 'data/demo_images/'
+    rgb_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("color.png")])
+    depth_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("depth.png")])
     print(rgb_filenames)
     print(depth_filenames)
 
@@ -125,8 +123,10 @@ if __name__ == '__main__':
 
     # start a session
     saver = tf.train.Saver()
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.6)
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options))
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.35)
+    gpu_config = tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
+    cpu_config = tf.ConfigProto(device_count = {'GPU': 0})
+    sess = tf.Session(config=gpu_config)
     saver.restore(sess, args.model)
     print ('Loading model weights from {:s}').format(args.model)
 
@@ -165,9 +165,10 @@ if __name__ == '__main__':
     for idx in range(len(rgb_filenames)):
         im_file = rgb_filenames[idx]
         depth_file = depth_filenames[idx]
-        im = pad_im(cv2.imread(im_file, cv2.IMREAD_UNCHANGED), 16)
+        img = cv2.imread(im_file, cv2.IMREAD_UNCHANGED)
+        im = pad_im(img, 16)
 
-        im_blob, im_rescale_blob, im_scale_factors = _get_image_blob(im)
+        im_blob, im_rescale_blob, im_scale_factors = _get_image_blob(im, im_scale, cfg.PIXEL_MEANS)
 
         height = int(im.shape[0] * im_scale)
         width = int(im.shape[1] * im_scale)
@@ -183,9 +184,9 @@ if __name__ == '__main__':
 
         sess.run(net.enqueue_op, feed_dict=feed_dict)
 
-        labels_2d, probs, vertex_pred, rois, poses_init, poses_pred = \
+        labels_2d, probs, vertex_pred, rois, poses_init, poses_pred, hough = \
             sess.run([net.get_output('label_2d'), net.get_output('prob_normalized'), net.get_output('vertex_pred'), \
-                      net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh')])
+                      net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh'), net.get_output('hough')])
 
         # non-maximum suppression
 
@@ -203,7 +204,7 @@ if __name__ == '__main__':
             if class_id >= 0:
                 poses[i, :4] = poses_pred[i, 4*class_id:4*class_id+4]
 
-        vertex_pred = vertex_pred[0, :, :, :]
+        # vertex_pred = vertex_pred[0, :, :, :]
 
         labels = labels_2d[0,:,:].astype(np.int32)
         probs = probs[0,:,:,:]
@@ -218,10 +219,15 @@ if __name__ == '__main__':
 
         pose_data = [{"name": roi_classes[ix], "pose": p.tolist()} for ix, p in enumerate(poses)]
 
-        SAVE = True
+        SAVE = False
+
+        im_file_prefix = im_file.replace("color.png","")
+        # np.save(im_file_prefix + "label2d.npy", labels_2d)
+        # np.save(im_file_prefix + "vert_pred.npy", vertex_pred)
+
         if SAVE:
             import json
-            j_file = im_file.replace("color.png", "pred_pose.json")
+            j_file = im_file_prefix + "pred_pose.json"
             with open(j_file, "w") as f:
                 j_data = {"poses": pose_data, "meta": {'intrinsic_matrix': K.tolist(), 'factor_depth': factor_depth}}
                 json.dump(j_data, f)
@@ -230,11 +236,20 @@ if __name__ == '__main__':
         VIS = True
         # if cfg.TEST.VISUALIZE:
         if VIS:
+            color_m = np.zeros(img.shape, dtype=np.uint8)
+            for c in xrange(num_classes-1):
+                cls = c + 1
+                color = np.random.randint(0,255,size=(3))
+                color_m[labels==cls] = color
+            cv2.imshow("img", img)
+            cv2.imshow("m", color_m)
+            cv2.waitKey(100)
+
             im_depth = pad_im(cv2.imread(depth_file, cv2.IMREAD_UNCHANGED), 16)
 
             from vis_utils import extract_vertmap, vis_segmentations_vertmaps_detection
 
-            vertmap = extract_vertmap(labels, vertex_pred, num_classes)
+            vertmap = extract_vertmap(labels, vertex_pred[0], num_classes)
             vis_segmentations_vertmaps_detection(im, im_depth, im_label, imdb._class_colors, vertmap, 
                 labels, rois, poses, meta_data['intrinsic_matrix'], imdb.num_classes, imdb._classes, imdb._points_all)
 
