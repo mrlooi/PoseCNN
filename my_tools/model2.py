@@ -282,7 +282,35 @@ class pose_reg_net(Network):
              .fc(4 * self.num_classes, relu=False, name='fc8')
              .tanh(name='poses_tanh'))
 
+class ave_distance_loss_net(Network):
+    def __init__(self, num_classes):
+        self.num_classes = num_classes
+ 
+        self.poses_pred = tf.placeholder(tf.float32, shape=[None, 4 * num_classes]) 
+        self.poses_target = tf.placeholder(tf.float32, shape=[None, 4 * num_classes])
+        self.poses_weight = tf.placeholder(tf.float32, shape=[None, 4 * num_classes])
+        self.points = tf.placeholder(tf.float32, shape=[num_classes, None, 3])
+        self.symmetry = tf.placeholder(tf.float32, shape=[num_classes])
 
+        self.layers = dict({'poses_pred': self.poses_pred, 'poses_target': self.poses_target, 
+                'poses_weight': self.poses_weight, 'points': self.points, 'symmetry': self.symmetry})
+
+        self.setup()
+
+    def setup(self):
+        (self.feed('poses_pred', 'poses_target', 'poses_weight', 'points', 'symmetry')
+             .average_distance_loss(margin=0.01, name='loss_pose'))
+
+    def test(self, sess):
+        symmetry = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+        pose_w = np.load("poses_weight.npy")
+        pose_t = np.load("poses_target.npy")
+        pose_p = np.load("poses_pred.npy")
+        pts = np.load("points_all.npy")
+
+        feed_dict = {self.poses_pred: pose_p, self.poses_target: pose_t, self.poses_weight: pose_w, self.points: pts, self.symmetry: symmetry}
+        loss_pose = sess.run(self.get_output('loss_pose'), feed_dict)
+        return loss_pose
 
 if __name__ == '__main__':
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.4)
@@ -328,58 +356,63 @@ if __name__ == '__main__':
 
         roi_pool1, roi_pool2, rois, conv5_3 = net.get_outputs(sess, feed_dict, ['roi_pool1', "roi_pool2", "rois", "conv5_3"])
 
-    # def pose_reg_demo():
-    num_classes = 22
-    net = pose_reg_net(num_classes)
+    def pose_reg_demo():
+        num_classes = 22
+        net = pose_reg_net(num_classes)
+
+        sess = tf.Session(config=gpu_config)
+        saver = tf.train.Saver()
+        saver.restore(sess, model_file)
+
+        rois = np.load("rois.npy")
+        conv5_3 = np.load("conv5_3.npy")
+        conv4_3 = np.load("conv4_3.npy")
+        feed_dict = {net.rois: rois, net.conv4_3: conv4_3, net.conv5_3: conv5_3}
+        rp1, rp2, pool_score, fc6, fc7, fc8, poses_tanh = sess.run([net.get_output('roi_pool1'), net.get_output('roi_pool2'), net.get_output('pool_score'), 
+                net.get_output('fc6'),net.get_output('fc7'),net.get_output('fc8'), net.get_output('poses_tanh')], feed_dict)
+        rp1_tf = rp1[0]
+        rp2_tf = rp2[0]
+
+        # def get_error(pth_l, tf_l):
+        #     x = pth_l.data.cpu().numpy()
+        #     e = np.abs(x-tf_l)
+        #     print(np.sum(e))
+        def get_error(d1, d2):
+            # x = pth_l.data.cpu().numpy()
+            e = np.abs(d1-d2)
+            print(np.sum(e))
+
+        def get_pth_rois(rois_raw):
+            r = np.zeros((len(rois_raw),5), dtype=np.float32)
+            r[:,0] = rois_raw[:,0]
+            r[:,1:] = rois_raw[:,2:-1]
+            return r
+
+        from convert_to_pth import PoseCNN
+        import torch
+        import torch.nn as nn
+        import torch.nn.functional as F
+        FCT = torch.cuda.FloatTensor
+        model = PoseCNN(64, num_classes)
+        model.load_state_dict(torch.load("posecnn.pth"))
+        model.cuda()
+        model.eval()
+
+        pth_rois = get_pth_rois(rois)
+
+        rp1 = model.roi_pool1(FCT(np.transpose(conv5_3, [0,3,1,2])), FCT(pth_rois))
+        rp2 = model.roi_pool2(FCT(np.transpose(conv4_3, [0,3,1,2])), FCT(pth_rois))
+
+        get_error(rp1.data.cpu().numpy(), np.transpose(rp1_tf, [0,3,1,2]))
+        get_error(rp2.data.cpu().numpy(), np.transpose(rp2_tf, [0,3,1,2]))
+
+        rp = torch.add(rp1, rp2)
+        rp_flat = rp.view(-1, 7*7*512)
+        pose_reg = model.poses_fc(rp_flat)
+        get_error(F.tanh(pose_reg).data.cpu().numpy(), poses_tanh)
 
     sess = tf.Session(config=gpu_config)
-    saver = tf.train.Saver()
-    saver.restore(sess, model_file)
+    sess.run(tf.global_variables_initializer())
 
-    rois = np.load("rois.npy")
-    conv5_3 = np.load("conv5_3.npy")
-    conv4_3 = np.load("conv4_3.npy")
-    feed_dict = {net.rois: rois, net.conv4_3: conv4_3, net.conv5_3: conv5_3}
-    rp1, rp2, pool_score, fc6, fc7, fc8, poses_tanh = sess.run([net.get_output('roi_pool1'), net.get_output('roi_pool2'), net.get_output('pool_score'), 
-            net.get_output('fc6'),net.get_output('fc7'),net.get_output('fc8'), net.get_output('poses_tanh')], feed_dict)
-    rp1_tf = rp1[0]
-    rp2_tf = rp2[0]
-
-    # def get_error(pth_l, tf_l):
-    #     x = pth_l.data.cpu().numpy()
-    #     e = np.abs(x-tf_l)
-    #     print(np.sum(e))
-    def get_error(d1, d2):
-        # x = pth_l.data.cpu().numpy()
-        e = np.abs(d1-d2)
-        print(np.sum(e))
-
-    def get_pth_rois(rois_raw):
-        r = np.zeros((len(rois_raw),5), dtype=np.float32)
-        r[:,0] = rois_raw[:,0]
-        r[:,1:] = rois_raw[:,2:-1]
-        return r
-
-    from convert_to_pth import PoseCNN
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
-    FCT = torch.cuda.FloatTensor
-    model = PoseCNN(64, num_classes)
-    model.load_state_dict(torch.load("posecnn.pth"))
-    model.cuda()
-    model.eval()
-
-    pth_rois = get_pth_rois(rois)
-
-    rp1 = model.roi_pool1(FCT(np.transpose(conv5_3, [0,3,1,2])), FCT(pth_rois))
-    rp2 = model.roi_pool2(FCT(np.transpose(conv4_3, [0,3,1,2])), FCT(pth_rois))
-
-    get_error(rp1.data.cpu().numpy(), np.transpose(rp1_tf, [0,3,1,2]))
-    get_error(rp2.data.cpu().numpy(), np.transpose(rp2_tf, [0,3,1,2]))
-
-    rp = torch.add(rp1, rp2)
-    rp_flat = rp.view(-1, 7*7*512)
-    pose_reg = model.poses_fc(rp_flat)
-    get_error(F.tanh(pose_reg).data.cpu().numpy(), poses_tanh)
-
+    net = ave_distance_loss_net(22)
+    loss_pose = net.test(sess)
