@@ -19,7 +19,7 @@ class vgg_test_net(Network):
         self.keep_prob = tf.placeholder(tf.float32)
 
         # needed during training, for hough voting layer
-        self.meta_data = tf.placeholder(tf.float32, shape=[None, 1, 1, 48])
+        self.meta_data = tf.placeholder(tf.float32, shape=[None, 48])
         self.poses = tf.placeholder(tf.float32, shape=[None, 13])
         self.extents = tf.placeholder(tf.float32, shape=[num_classes, 3])
 
@@ -29,12 +29,11 @@ class vgg_test_net(Network):
         self.vote_threshold = -1.0
         self.skip_pixels = 10
         self.vote_percentage = 0.02
-        # if is_train:
-        #     self.skip_pixels = 10
-        #     self.vote_percentage = 0.02
-        # else:
-        #     self.skip_pixels = 10
-        #     self.vote_percentage = 0.02
+
+        # if self.is_train:
+        #     self.points = tf.placeholder(tf.float32, shape=[num_classes, None, 3])
+        #     self.symmetry = tf.placeholder(tf.float32, shape=[num_classes])
+
 
         queue_size = 25
         q = tf.FIFOQueue(queue_size, [tf.float32, tf.int32, tf.float32, tf.float32, tf.float32, tf.float32])
@@ -118,6 +117,34 @@ class vgg_test_net(Network):
         self.layers['poses_init'] = poses_init
         self.layers['poses_target'] = poses_target
         self.layers['poses_weight'] = poses_weight
+
+        """
+        POSE REG LAYER
+        """
+        (self.feed('conv5_3', 'rois')
+             .roi_pool(7, 7, 1.0 / 16.0, 0, name='roi_pool1'))
+             #.crop_pool_new(16.0, pool_size=7, name='roi_pool1'))
+             
+        (self.feed('conv4_3', 'rois')
+             .roi_pool(7, 7, 1.0 / 8.0, 0, name='roi_pool2'))
+
+        (self.feed('roi_pool1', 'roi_pool2')
+             .add(name='pool_score')
+             .fc(4096, height=7, width=7, channel=512, name='fc6')
+             .dropout(self.keep_prob_queue, name='drop6')
+             .fc(4096, num_in=4096, name='fc7')
+             .dropout(self.keep_prob_queue, name='drop7')
+             .fc(4 * self.num_classes, relu=False, name='fc8')
+             .tanh(name='poses_tanh'))
+
+        # (self.feed('poses_tanh', 'poses_weight')
+        #      .multiply(name='poses_mul')
+        #      .l2_normalize(dim=1, name='poses_pred'))
+
+        # if self.is_train:
+        #     (self.feed('poses_pred', 'poses_target', 'poses_weight', 'points', 'symmetry')
+        #          .average_distance_loss(margin=0.01, name='loss_pose'))
+
         
     def check_output_shapes(self, sess, feed_dict, keyword=None):
         sess.run(self.enqueue_op, feed_dict=feed_dict)
@@ -223,47 +250,136 @@ class hough_net(Network):
         hough = sess.run(self.get_output('hough'), feed_dict)
         return hough
 
+class pose_reg_net(Network):
+    def __init__(self, num_classes):
+        im_width = 640
+        im_height = 480
+
+        self.num_classes = num_classes
+ 
+        # self.roi_pool1 = tf.placeholder(tf.float32, shape=[None, None, None]) 
+        # self.roi_pool2 = tf.placeholder(tf.float32, shape=[None, None, None, num_classes * 3]) 
+        self.rois = tf.placeholder(tf.float32, shape=[None, 7]) 
+        self.conv5_3 = tf.placeholder(tf.float32, shape=[None, 30, 40, 512])
+        self.conv4_3 = tf.placeholder(tf.float32, shape=[None, 60, 80, 512])
+
+        self.layers = dict({'rois': self.rois, 'conv5_3': self.conv5_3, 'conv4_3': self.conv4_3})
+
+        self.setup()
+
+    def setup(self):
+        (self.feed('conv5_3', 'rois')
+             .roi_pool(7, 7, 1.0 / 16.0, 0, name='roi_pool1'))
+             #.crop_pool_new(16.0, pool_size=7, name='roi_pool1'))
+             
+        (self.feed('conv4_3', 'rois')
+             .roi_pool(7, 7, 1.0 / 8.0, 0, name='roi_pool2'))
+
+        (self.feed('roi_pool1', 'roi_pool2')
+             .add(name='pool_score')
+             .fc(4096, height=7, width=7, channel=512, name='fc6')
+             .fc(4096, num_in=4096, name='fc7')
+             .fc(4 * self.num_classes, relu=False, name='fc8')
+             .tanh(name='poses_tanh'))
+
+
+
 if __name__ == '__main__':
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.4)
     gpu_config = tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
     cpu_config = tf.ConfigProto(device_count = {'GPU': 0})
 
+    model_file = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
+
     def hough_net_demo():
-        sess = tf.Session(config=cpu_config)
+        sess = tf.Session(config=gpu_config)
         sess.run(tf.global_variables_initializer())
 
         net = hough_net(22)
         hough = net.test(sess)
+        return hough
 
-    # @persistent_locals
-    # def demo():
-    model_file = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
+    # hough_outputs = hough_net_demo()
+    # rois = hough_outputs[0]
+
+    def vgg_net_demo():
+        num_classes = 22
+        height = 480
+        width = 640
+
+        im_blob = np.ones((1,height,width,3)) # num_classes))
+
+        net = vgg_test_net(num_classes, 64)    
+        rand_blob = np.random.randint(0, 10, size=(1,height,width,num_classes))
+        label_blob = np.random.randint(0, num_classes, size=(1, height, width))
+        extents_blob = np.zeros((num_classes, 3), dtype=np.float32)
+        pose_blob = np.zeros((1, 13), dtype=np.float32)
+        meta_blob = np.zeros((1,1,1,48), dtype=np.float32)
+
+        feed_dict = {net.data: im_blob, net.gt_label_2d: label_blob, net.keep_prob: 1.0, net.extents: extents_blob, net.poses: pose_blob, net.meta_data: meta_blob}
+
+        sess = tf.Session(config=gpu_config)
+        saver = tf.train.Saver()
+        saver.restore(sess, model_file)
+        # sess.run(tf.global_variables_initializer())
+
+        net.check_output_shapes(sess, feed_dict, 'conv')
+        # rois, poses_init = net.get_outputs(sess, feed_dict, ['rois','poses_init'])
+
+        roi_pool1, roi_pool2, rois, conv5_3 = net.get_outputs(sess, feed_dict, ['roi_pool1', "roi_pool2", "rois", "conv5_3"])
+
+    # def pose_reg_demo():
     num_classes = 22
-    height = 480
-    width = 640
-
-    im_blob = np.ones((1,height,width,3)) # num_classes))
-
-    net = vgg_test_net(num_classes, 64)    
-    # net = test_net(num_classes, 64)
-    # feed_dict = {net.data: rand_blob, net.gt_label_2d: label_blob, net.keep_prob: 1.0}
-    # prob_n, lab_2d, gt_lab_weight = sess.run([net.get_output("prob_normalized"), net.get_output("label_2d"), 
-    #                 net.get_output("gt_label_weight")], feed_dict)
-
-    rand_blob = np.random.randint(0, 10, size=(1,height,width,num_classes))
-    label_blob = np.random.randint(0, num_classes, size=(1, height, width))
-    extents_blob = np.zeros((num_classes, 3), dtype=np.float32)
-    pose_blob = np.zeros((1, 13), dtype=np.float32)
-    meta_blob = np.zeros((1,1,1,48), dtype=np.float32)
-
-    feed_dict = {net.data: im_blob, net.gt_label_2d: label_blob, net.keep_prob: 1.0, net.extents: extents_blob, net.poses: pose_blob, net.meta_data: meta_blob}
+    net = pose_reg_net(num_classes)
 
     sess = tf.Session(config=gpu_config)
     saver = tf.train.Saver()
     saver.restore(sess, model_file)
-    # sess.run(tf.global_variables_initializer())
 
-    net.check_output_shapes(sess, feed_dict, 'conv')
-    # rois, poses_init = net.get_outputs(sess, feed_dict, ['rois','poses_init'])
+    rois = np.load("rois.npy")
+    conv5_3 = np.load("conv5_3.npy")
+    conv4_3 = np.load("conv4_3.npy")
+    feed_dict = {net.rois: rois, net.conv4_3: conv4_3, net.conv5_3: conv5_3}
+    rp1, rp2, pool_score, fc6, fc7, fc8, poses_tanh = sess.run([net.get_output('roi_pool1'), net.get_output('roi_pool2'), net.get_output('pool_score'), 
+            net.get_output('fc6'),net.get_output('fc7'),net.get_output('fc8'), net.get_output('poses_tanh')], feed_dict)
+    rp1_tf = rp1[0]
+    rp2_tf = rp2[0]
 
-    conv1_2 = net.get_outputs(sess, feed_dict, ['conv1_2'])
+    # def get_error(pth_l, tf_l):
+    #     x = pth_l.data.cpu().numpy()
+    #     e = np.abs(x-tf_l)
+    #     print(np.sum(e))
+    def get_error(d1, d2):
+        # x = pth_l.data.cpu().numpy()
+        e = np.abs(d1-d2)
+        print(np.sum(e))
+
+    def get_pth_rois(rois_raw):
+        r = np.zeros((len(rois_raw),5), dtype=np.float32)
+        r[:,0] = rois_raw[:,0]
+        r[:,1:] = rois_raw[:,2:-1]
+        return r
+
+    from convert_to_pth import PoseCNN
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    FCT = torch.cuda.FloatTensor
+    model = PoseCNN(64, num_classes)
+    model.load_state_dict(torch.load("posecnn.pth"))
+    model.cuda()
+    model.eval()
+
+    pth_rois = get_pth_rois(rois)
+
+    rp1 = model.roi_pool1(FCT(np.transpose(conv5_3, [0,3,1,2])), FCT(pth_rois))
+    rp2 = model.roi_pool2(FCT(np.transpose(conv4_3, [0,3,1,2])), FCT(pth_rois))
+
+    get_error(rp1.data.cpu().numpy(), np.transpose(rp1_tf, [0,3,1,2]))
+    get_error(rp2.data.cpu().numpy(), np.transpose(rp2_tf, [0,3,1,2]))
+
+    rp = torch.add(rp1, rp2)
+    rp_flat = rp.view(-1, 7*7*512)
+    pose_reg = model.poses_fc(rp_flat)
+    get_error(F.tanh(pose_reg).data.cpu().numpy(), poses_tanh)
+

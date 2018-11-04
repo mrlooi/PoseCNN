@@ -82,7 +82,7 @@ def _get_image_blob(im, im_scale=1, PIXEL_MEANS=None):
     return blob, blob_rescale, np.array(im_scale_factors)
 
 def get_network():
-    from model import vgg16_convs
+    from model1 import vgg16_convs
     return vgg16_convs(cfg.TRAIN.NUM_CLASSES, cfg.TRAIN.NUM_UNITS, \
                                                      cfg.TRAIN.THRESHOLD_LABEL, cfg.TRAIN.VOTING_THRESHOLD, \
                                                      cfg.TRAIN.VERTEX_REG_2D, \
@@ -184,12 +184,16 @@ if __name__ == '__main__':
 
         sess.run(net.enqueue_op, feed_dict=feed_dict)
 
-        labels_2d, probs, vertex_pred, rois, poses_init, poses_pred, hough = \
+        labels_2d, probs, vertex_pred, rois, poses_init, poses_pred, conv5_3, roi_pool1 = \
             sess.run([net.get_output('label_2d'), net.get_output('prob_normalized'), net.get_output('vertex_pred'), \
-                      net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh'), net.get_output('hough')])
+                      net.get_output('rois'), net.get_output('poses_init'), net.get_output('poses_tanh'), net.get_output('conv5_3'), net.get_output('roi_pool1')])
+
+        # np.save("conv5_3.npy", conv5_3)
+        # np.save("roi_pool1_0.npy", roi_pool1[0])
+        # np.save("roi_pool1_1.npy", roi_pool1[1])
+        # np.save("rois.npy", rois)
 
         # non-maximum suppression
-
         keep = nms(rois, 0.5)
         rois = rois[keep, :]
         poses_init = poses_init[keep, :]
@@ -222,8 +226,8 @@ if __name__ == '__main__':
         SAVE = False
 
         im_file_prefix = im_file.replace("color.png","")
-        # np.save(im_file_prefix + "label2d.npy", labels_2d)
-        # np.save(im_file_prefix + "vert_pred.npy", vertex_pred)
+        np.save(im_file_prefix + "label2d.npy", labels_2d)
+        np.save(im_file_prefix + "vert_pred.npy", vertex_pred)
 
         if SAVE:
             import json
