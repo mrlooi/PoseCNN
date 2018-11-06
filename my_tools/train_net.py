@@ -259,10 +259,10 @@ if __name__ == '__main__':
 
     im = cv2.imread(roidb[i]['label'], cv2.IMREAD_UNCHANGED)
 
-    meta_data = scipy.io.loadmat(roidb[i]['meta_data'])
+    meta_data = sio.loadmat(roidb[i]['meta_data'])
     class_colors = roidb[i]['class_colors']
     class_weights = roidb[i]['class_weights']
-    im_cls, im_labels = _process_label_image(im, class_colors, class_weights)
+    # im_cls, im_labels = _process_label_image(im, class_colors, class_weights)
 
     from transforms3d.quaternions import mat2quat
 
