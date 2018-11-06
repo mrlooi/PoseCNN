@@ -151,7 +151,6 @@ def _get_label_blob(roidb, num_classes, im_scales):
     processed_meta_data = []
     processed_vertex_targets = []
     processed_vertex_weights = []
-    pose_blob = np.zeros((0, 13), dtype=np.float32)
 
     for i in xrange(num_images):
         im_scale = im_scales[i]
@@ -174,6 +173,7 @@ def _get_label_blob(roidb, num_classes, im_scales):
         if im_scale != 1:
             im = cv2.resize(im, None, None, fx=im_scale, fy=im_scale, interpolation=cv2.INTER_NEAREST)
 
+        cls_indexes = meta_data['cls_indexes']
         # if num_classes == 2:
         #     I = np.where(im > 0)
         #     im[I[0], I[1]] = 1
@@ -187,7 +187,7 @@ def _get_label_blob(roidb, num_classes, im_scales):
         if len(poses.shape) == 2:
             poses = np.reshape(poses, (3, 4, 1))
 
-        center_targets, center_weights = _vote_centers(im, meta_data['cls_indexes'], im_scale * meta_data['center'], poses, num_classes)
+        center_targets, center_weights = _vote_centers(im, cls_indexes, im_scale * meta_data['center'], poses, num_classes)
         processed_vertex_targets.append(center_targets)
         processed_vertex_weights.append(center_weights)
 
@@ -198,12 +198,12 @@ def _get_label_blob(roidb, num_classes, im_scales):
             T = poses[:, 3, j]
 
             qt[j, 0] = i
-            qt[j, 1] = meta_data['cls_indexes'][j, 0]
+            qt[j, 1] = cls_indexes[j, 0]
             qt[j, 2:6] = 0  # fill box later, roidb[i]['boxes'][j, :]
             qt[j, 6:10] = mat2quat(R)
             qt[j, 10:] = T
 
-        pose_blob = np.concatenate((pose_blob, qt), axis=0)
+        pose_blob = qt
 
         # # depth
         # if roidb[i]['flipped']:
