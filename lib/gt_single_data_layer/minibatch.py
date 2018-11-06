@@ -19,7 +19,7 @@ from normals import gpu_normals
 from transforms3d.quaternions import mat2quat, quat2mat
 
 
-def get_minibatch(roidb, voxelizer, extents):
+def get_minibatch(roidb, num_classes, extents):
     """Given a roidb, construct a minibatch sampled from it."""
     num_images = len(roidb)
 
@@ -29,7 +29,7 @@ def get_minibatch(roidb, voxelizer, extents):
 
     # build the label blob
     depth_blob, label_blob, meta_data_blob, vertex_target_blob, vertex_weight_blob, pose_blob, \
-        gan_z_blob = _get_label_blob(roidb, voxelizer, im_scales)
+        gan_z_blob = _get_label_blob(roidb, num_classes, im_scales)
 
     # For debug visualizations
     if cfg.TRAIN.VISUALIZE:
@@ -184,11 +184,11 @@ def _process_label_image(label_image, class_colors, class_weights):
     return label_index, labels
 
 
-def _get_label_blob(roidb, voxelizer, im_scales):
+def _get_label_blob(roidb, num_classes, im_scales):
     """ build the label blob """
 
     num_images = len(roidb)
-    num_classes = voxelizer.num_classes
+    # num_classes = voxelizer.num_classes
     processed_depth = []
     processed_label = []
     processed_meta_data = []
@@ -347,17 +347,17 @@ def _vote_centers(im_label, cls_indexes, center, poses, num_classes):
             c[0] = center[ind, 0]
             c[1] = center[ind, 1]
             z = poses[2, 3, ind]
-            R = np.tile(c, (1, len(x))) - np.vstack((x, y))
+            R = c - np.vstack((x, y))
             # compute the norm
             N = np.linalg.norm(R, axis=0) + 1e-10
             # normalization
-            R = np.divide(R, np.tile(N, (2,1)))
+            R = R / N # np.divide(R, np.tile(N, (2,1)))
             # assignment
             start = 3 * i
             end = start + 3
-            vertex_targets[y, x, 3*i] = R[0,:]
-            vertex_targets[y, x, 3*i+1] = R[1,:]
-            vertex_targets[y, x, 3*i+2] = z
+            vertex_targets[y, x, start] = R[0,:]
+            vertex_targets[y, x, start+1] = R[1,:]
+            vertex_targets[y, x, start+2] = z
             vertex_weights[y, x, start:end] = 10.0
 
     return vertex_targets, vertex_weights
@@ -388,6 +388,24 @@ def _unscale_vertmap(vertmap, labels, extents, num_classes):
             vertmap[index[0], index[1], i] = (vertmap[index[0], index[1], i] - b) / a
     return vertmap
 
+
+def _get_bb3D(extent):
+    bb = np.zeros((3, 8), dtype=np.float32)
+    
+    xHalf = extent[0] * 0.5
+    yHalf = extent[1] * 0.5
+    zHalf = extent[2] * 0.5
+    
+    bb[:, 0] = [xHalf, yHalf, zHalf]
+    bb[:, 1] = [-xHalf, yHalf, zHalf]
+    bb[:, 2] = [xHalf, -yHalf, zHalf]
+    bb[:, 3] = [-xHalf, -yHalf, zHalf]
+    bb[:, 4] = [xHalf, yHalf, -zHalf]
+    bb[:, 5] = [-xHalf, yHalf, -zHalf]
+    bb[:, 6] = [xHalf, -yHalf, -zHalf]
+    bb[:, 7] = [-xHalf, -yHalf, -zHalf]
+    
+    return bb
 
 def _get_vertex_regression_labels(im_label, vertmap, extents, num_classes):
     height = im_label.shape[0]
@@ -442,24 +460,6 @@ def _get_gan_labels(im_label, class_colors, num_classes):
     return labels_true, labels_false, labels_color
 
 
-def _get_bb3D(extent):
-    bb = np.zeros((3, 8), dtype=np.float32)
-    
-    xHalf = extent[0] * 0.5
-    yHalf = extent[1] * 0.5
-    zHalf = extent[2] * 0.5
-    
-    bb[:, 0] = [xHalf, yHalf, zHalf]
-    bb[:, 1] = [-xHalf, yHalf, zHalf]
-    bb[:, 2] = [xHalf, -yHalf, zHalf]
-    bb[:, 3] = [-xHalf, -yHalf, zHalf]
-    bb[:, 4] = [xHalf, yHalf, -zHalf]
-    bb[:, 5] = [-xHalf, yHalf, -zHalf]
-    bb[:, 6] = [xHalf, -yHalf, -zHalf]
-    bb[:, 7] = [-xHalf, -yHalf, -zHalf]
-    
-    return bb
-
 
 def _vis_minibatch(im_blob, im_normal_blob, depth_blob, label_blob, meta_data_blob, vertex_target_blob, pose_blob, extents):
     """Visualize a mini-batch for debugging."""
@@ -478,7 +478,6 @@ def _vis_minibatch(im_blob, im_normal_blob, depth_blob, label_blob, meta_data_bl
         # project the 3D box to image
         metadata = meta_data_blob[i, 0, 0, :]
         intrinsic_matrix = metadata[:9].reshape((3,3))
-        print intrinsic_matrix
         for j in xrange(pose_blob.shape[0]):
             if pose_blob[j, 0] != i:
                 continue
@@ -541,5 +540,32 @@ def _vis_minibatch(im_blob, im_normal_blob, depth_blob, label_blob, meta_data_bl
             plt.imshow(center[:,:,2])
         else:
             plt.imshow(l)
+
+        plt.show()
+
+def _vis_minibatch_box(im_blob, gt_boxes):
+    """Visualize a mini-batch for debugging."""
+    import matplotlib.pyplot as plt
+
+    for i in xrange(im_blob.shape[0]):
+        fig = plt.figure()
+        # show image
+        im = im_blob[i, :, :, :].copy()
+        im += cfg.PIXEL_MEANS
+        im = im[:, :, (2, 1, 0)]
+        im = im.astype(np.uint8)
+        ax = fig.add_subplot(1, 2, 1)
+        plt.imshow(im)
+        ax.set_title('color') 
+
+        ax = fig.add_subplot(1, 2, 2)
+        plt.imshow(im)
+        for j in xrange(gt_boxes.shape[0]):
+            x1 = gt_boxes[j, 0]
+            y1 = gt_boxes[j, 1]
+            x2 = gt_boxes[j, 2]
+            y2 = gt_boxes[j, 3]
+            plt.gca().add_patch(
+                plt.Rectangle((x1, y1), x2-x1, y2-y1, fill=False, edgecolor='g', linewidth=3))
 
         plt.show()

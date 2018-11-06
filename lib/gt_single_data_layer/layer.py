@@ -11,7 +11,7 @@
 from fcn.config import cfg
 from gt_single_data_layer.minibatch import get_minibatch
 import numpy as np
-from utils.voxelizer import Voxelizer
+# from utils.voxelizer import Voxelizer
 
 class GtSingleDataLayer(object):
     """FCN data layer used for training."""
@@ -21,7 +21,7 @@ class GtSingleDataLayer(object):
         self._roidb = roidb
         self._num_classes = num_classes
         self._extents = extents;
-        self._voxelizer = Voxelizer(cfg.TRAIN.GRID_SIZE, num_classes)
+        # self._voxelizer = Voxelizer(cfg.TRAIN.GRID_SIZE, num_classes)
         self._shuffle_roidb_inds()
 
     def _shuffle_roidb_inds(self):
@@ -46,7 +46,7 @@ class GtSingleDataLayer(object):
         """Return the blobs to be used for the next minibatch."""
         db_inds = self._get_next_minibatch_inds()
         minibatch_db = [self._roidb[i] for i in db_inds]
-        return get_minibatch(minibatch_db, self._voxelizer, self._extents)
+        return get_minibatch(minibatch_db, self._num_classes, self._extents)
             
     def forward(self):
         """Get blobs and copy them into this layer's top blob vector."""

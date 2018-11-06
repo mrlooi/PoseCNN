@@ -21,6 +21,8 @@ from normals import gpu_normals
 from transforms3d.quaternions import mat2quat, quat2mat
 from utils.timer import Timer
 
+from gt_single_data_layer.minibatch import _process_label_image, _scale_vertmap, _get_bb3D, _vis_minibatch_box
+
 def get_minibatch(roidb, extents, points, symmetry, num_classes, backgrounds, intrinsic_matrix, \
     data_queue, db_inds_syn, is_syn, db_inds_adapt, is_adapt, is_symmetric):
     """Given a roidb, construct a minibatch sampled from it."""
@@ -237,34 +239,6 @@ def _get_image_blob(roidb, scale_ind, num_classes, backgrounds, intrinsic_matrix
     width = processed_ims[0].shape[1]
 
     return blob, blob_depth, blob_normal, im_scales, data_out, height, width
-
-
-def _process_label_image(label_image, class_colors, class_weights):
-    """
-    change label image to label index
-    """
-    height = label_image.shape[0]
-    width = label_image.shape[1]
-    num_classes = len(class_colors)
-    label_index = np.zeros((height, width, num_classes), dtype=np.float32)
-    labels = np.zeros((height, width), dtype=np.int32)
-
-    if len(label_image.shape) == 3:
-        # label image is in BGR order
-        index = label_image[:,:,2] + 256*label_image[:,:,1] + 256*256*label_image[:,:,0]
-        for i in xrange(len(class_colors)):
-            color = class_colors[i]
-            ind = color[0] + 256*color[1] + 256*256*color[2]
-            I = np.where(index == ind)
-            label_index[I[0], I[1], i] = class_weights[i]
-            labels[I[0], I[1]] = i
-    else:
-        for i in xrange(len(class_colors)):
-            I = np.where(label_image == i)
-            label_index[I[0], I[1], i] = class_weights[i]
-            labels[I[0], I[1]] = i
-    
-    return label_index, labels
 
 
 def _get_label_blob(roidb, intrinsic_matrix, data_out, num_classes, db_inds_syn, im_scales, extents, \
@@ -602,51 +576,6 @@ def _generate_vertex_targets(im_label, cls_indexes, center, poses, num_classes, 
     return vertex_targets, vertex_weights
 
 
-def _scale_vertmap(vertmap, index, extents):
-    for i in range(3):
-        vmin = -extents[i] / 2
-        vmax = extents[i] / 2
-        if vmax - vmin > 0:
-            a = 1.0 / (vmax - vmin)
-            b = -1.0 * vmin / (vmax - vmin)
-        else:
-            a = 0
-            b = 0
-        vertmap[index[0], index[1], i] = a * vertmap[index[0], index[1], i] + b
-    return vertmap[index[0], index[1], :]
-
-
-def _unscale_vertmap(vertmap, labels, extents, num_classes):
-    for k in range(1, num_classes):
-        index = np.where(labels == k)
-        for i in range(3):
-            vmin = -extents[k, i] / 2
-            vmax = extents[k, i] / 2
-            a = 1.0 / (vmax - vmin)
-            b = -1.0 * vmin / (vmax - vmin)
-            vertmap[index[0], index[1], i] = (vertmap[index[0], index[1], i] - b) / a
-    return vertmap
-
-
-def _get_bb3D(extent):
-    bb = np.zeros((3, 8), dtype=np.float32)
-    
-    xHalf = extent[0] * 0.5
-    yHalf = extent[1] * 0.5
-    zHalf = extent[2] * 0.5
-    
-    bb[:, 0] = [xHalf, yHalf, zHalf]
-    bb[:, 1] = [-xHalf, yHalf, zHalf]
-    bb[:, 2] = [xHalf, -yHalf, zHalf]
-    bb[:, 3] = [-xHalf, -yHalf, zHalf]
-    bb[:, 4] = [xHalf, yHalf, -zHalf]
-    bb[:, 5] = [-xHalf, yHalf, -zHalf]
-    bb[:, 6] = [xHalf, -yHalf, -zHalf]
-    bb[:, 7] = [-xHalf, -yHalf, -zHalf]
-    
-    return bb
-
-
 def _vis_minibatch(im_blob, im_depth_blob, depth_blob, label_blob, meta_data_blob, vertex_target_blob, pose_blob, extents):
     """Visualize a mini-batch for debugging."""
     import matplotlib.pyplot as plt
@@ -744,30 +673,3 @@ def _vis_minibatch(im_blob, im_depth_blob, depth_blob, label_blob, meta_data_blo
 
         plt.show()
 
-
-def _vis_minibatch_box(im_blob, gt_boxes):
-    """Visualize a mini-batch for debugging."""
-    import matplotlib.pyplot as plt
-
-    for i in xrange(im_blob.shape[0]):
-        fig = plt.figure()
-        # show image
-        im = im_blob[i, :, :, :].copy()
-        im += cfg.PIXEL_MEANS
-        im = im[:, :, (2, 1, 0)]
-        im = im.astype(np.uint8)
-        ax = fig.add_subplot(1, 2, 1)
-        plt.imshow(im)
-        ax.set_title('color') 
-
-        ax = fig.add_subplot(1, 2, 2)
-        plt.imshow(im)
-        for j in xrange(gt_boxes.shape[0]):
-            x1 = gt_boxes[j, 0]
-            y1 = gt_boxes[j, 1]
-            x2 = gt_boxes[j, 2]
-            y2 = gt_boxes[j, 3]
-            plt.gca().add_patch(
-                plt.Rectangle((x1, y1), x2-x1, y2-y1, fill=False, edgecolor='g', linewidth=3))
-
-        plt.show()

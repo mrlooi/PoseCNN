@@ -17,3 +17,7 @@ images/*
 
 data/*
 build
+
+lib/*.c
+*.npy
+*.pth
