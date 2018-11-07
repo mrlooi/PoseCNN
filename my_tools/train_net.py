@@ -31,7 +31,7 @@ def get_lov2d_args():
 
     args = Args()
     args.gpu_id = 0
-    args.max_iters = 40000
+    args.max_iters = 5
     args.pretrained_model = "data/imagenet_models/vgg16.npy"
     args.pretrained_ckpt = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
@@ -85,40 +85,57 @@ class PoseCNNSolver(SolverWrapper):
         super(PoseCNNSolver, self).__init__(sess, network, None, None, output_dir, pretrained_model, pretrained_ckpt)
 
     def train_model_vertex_pose(self, sess, train_op, loss, loss_cls, loss_vertex, loss_pose, learning_rate, max_iters, data_layer):
+        from utils.timer import Timer
         """Network training loop."""
         # add summary
         # tf.summary.scalar('loss', loss)
         # merged = tf.summary.merge_all()
         # train_writer = tf.summary.FileWriter(self.output_dir, sess.graph)
 
-        coord = tf.train.Coordinator()
-        if cfg.TRAIN.VISUALIZE:
-            load_and_enqueue(sess, self.net, data_layer, coord)
-        else:
-            t = threading.Thread(target=load_and_enqueue, args=(sess, self.net, data_layer, coord))
-            t.start()
-
         # intialize variables
         sess.run(tf.global_variables_initializer())
-        if self.pretrained_model is not None:
-            print ('Loading pretrained model '
-                   'weights from {:s}').format(self.pretrained_model)
-            self.net.load(self.pretrained_model, sess, True)
-
         if self.pretrained_ckpt is not None:
             print ('Loading pretrained ckpt '
                    'weights from {:s}').format(self.pretrained_ckpt)
             self.restore(sess, self.pretrained_ckpt)
+        elif self.pretrained_model is not None:
+            print ('Loading pretrained model '
+                   'weights from {:s}').format(self.pretrained_model)
+            self.net.load(self.pretrained_model, sess, True)
 
         tf.get_default_graph().finalize()
 
+        coord = tf.train.Coordinator()
+        # USE_THREADING = True
+        # # if cfg.TRAIN.VISUALIZE:
+        # if USE_THREADING:
+        #     import threading
+        #     t = threading.Thread(target=load_and_enqueue, args=(sess, self.net, data_layer, coord))
+        #     t.start()
+        # else:
+        #     load_and_enqueue(sess, self.net, data_layer, coord) # RUNS IN INFINITE LOOP...
+
         # tf.train.write_graph(sess.graph_def, self.output_dir, 'model.pbtxt')
+
+        net = self.net
 
         last_snapshot_iter = -1
         timer = Timer()
         for iter in range(max_iters):
 
             timer.tic()
+
+            """===ENQUEUE DATA START==="""
+            blobs = data_layer.forward(iter)
+
+            feed_dict={net.data: blobs['data_image_color'], net.gt_label_2d: blobs['data_label'], net.keep_prob: 0.5, \
+                       net.vertex_targets: blobs['data_vertex_targets'], net.vertex_weights: blobs['data_vertex_weights'], \
+                       net.poses: blobs['data_pose'], net.extents: blobs['data_extents'], net.meta_data: blobs['data_meta_data'], \
+                       net.points: blobs['data_points'], net.symmetry: blobs['data_symmetry']}
+
+            sess.run(net.enqueue_op, feed_dict=feed_dict)
+            """===ENQUEUE DATA END==="""
+
             loss_value, loss_cls_value, loss_vertex_value, loss_pose_value, lr, _ = sess.run([loss, 
                     loss_cls, loss_vertex, loss_pose, learning_rate, train_op])
             # train_writer.add_summary(summary, iter)
@@ -139,7 +156,8 @@ class PoseCNNSolver(SolverWrapper):
 
         sess.run(self.net.close_queue_op)
         coord.request_stop()
-        coord.join([t])
+        # if USE_THREADING:
+        #     coord.join([t])
 
 
 def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretrained_ckpt=None, max_iters=40000):
@@ -179,19 +197,16 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     config = tf.ConfigProto(allow_soft_placement=True)
     config.gpu_options.per_process_gpu_memory_fraction = 0.85
     config.gpu_options.allow_growth = True
-    with tf.Session(config=config) as sess:
-        # # data layer
-        # if cfg.TRAIN.SINGLE_FRAME:
-        #     data_layer = GtSynthesizeLayer(roidb, imdb.num_classes, imdb._extents, imdb._points_all, imdb._symmetry, imdb.cache_path, imdb.name, imdb.data_queue, cfg.CAD, cfg.POSE)
-        # else:
-        #     data_layer = GtDataLayer(roidb, imdb.num_classes)
-        sw = PoseCNNSolver(sess, network, output_dir, pretrained_model=pretrained_model, pretrained_ckpt=pretrained_ckpt)
+    # with tf.Session(config=config) as sess:
+    sess = tf.Session(config=config)
+    sw = PoseCNNSolver(sess, network, output_dir, pretrained_model=pretrained_model, pretrained_ckpt=pretrained_ckpt)
 
-        data_layer = GtPoseCNNLayer(roidb, imdb.num_classes, imdb._extents)
+    data_layer = GtPoseCNNLayer(roidb, imdb.num_classes, imdb._extents, imdb._points_all, imdb._symmetry)
 
-        print('Training...')
-        sw.train_model_vertex_pose(sess, train_op, loss, loss_cls, loss_vertex, loss_pose, learning_rate, max_iters, data_layer)
-        print('Training complete')
+    print('Training...')
+    sw.train_model_vertex_pose(sess, train_op, loss, loss_cls, loss_vertex, loss_pose, learning_rate, max_iters, data_layer)
+    print('Training complete')
+    sess.close()
 
 if __name__ == '__main__':
     # from fcn.train import train_net#, get_training_roidb
@@ -214,73 +229,35 @@ if __name__ == '__main__':
 
     roidb = get_training_roidb(imdb)
 
-    # network = get_network()
+    network = get_network()
 
-    # train_net(network, imdb, roidb, output_dir,
-    #               pretrained_model=args.pretrained_model,
-    #               pretrained_ckpt=args.pretrained_ckpt,
-    #               max_iters=args.max_iters)
+    train_net(network, imdb, roidb, output_dir,
+                  pretrained_model=args.pretrained_model,
+                  pretrained_ckpt=args.pretrained_ckpt,
+                  max_iters=args.max_iters)
 
 
-    # DEBUG DATA LAYER
-    num_classes = imdb.num_classes
-    extents = imdb._extents
-    db_inds = [0,1,2]
-    minibatch_db = [roidb[i] for i in db_inds]
-    roidb = minibatch_db
+    # # DEBUG DATA LAYER
+    # num_classes = imdb.num_classes
+    # extents = imdb._extents
+    # db_inds = [0]
+    # minibatch_db = [roidb[i] for i in db_inds]
+    # roidb = minibatch_db
         
-    import scipy.io as sio
-    import cv2
-    num_images = len(roidb)
-    i = 0
-    meta_data = sio.loadmat(roidb[i]['meta_data'])
-    K = meta_data['intrinsic_matrix'].astype(np.float32, copy=True)
-    fx = K[0, 0]
-    fy = K[1, 1]
-    cx = K[0, 2]
-    cy = K[1, 2]
+    # from gt_posecnn_layer.minibatch import _vis_minibatch
+    # from gt_posecnn_layer.layer import GtPoseCNNLayer
+    # data_layer = GtPoseCNNLayer(roidb, imdb.num_classes, imdb._extents, imdb._points_all, imdb._symmetry)
+    # data = data_layer.forward(0)
+    # vertex_target = data['data_vertex_targets']
+    # _vis_minibatch(data['data_image_color'], None, data['data_label'], data['data_meta_data'], data['data_vertex_targets'], data['data_pose'], extents)
 
-    def pad_im(im, x):
-        return im
+    # blobs = data
+    # net = network
+    # feed_dict={net.data: blobs['data_image_color'], net.gt_label_2d: blobs['data_label'], net.keep_prob: 0.5, \
+    #    net.vertex_targets: blobs['data_vertex_targets'], net.vertex_weights: blobs['data_vertex_weights'], \
+    #    net.poses: blobs['data_pose'], net.extents: blobs['data_extents'], net.meta_data: blobs['data_meta_data'], \
+    #    net.points: blobs['data_points'], net.symmetry: blobs['data_symmetry']}
 
-    rgba = pad_im(cv2.imread(roidb[i]['image'], cv2.IMREAD_UNCHANGED), 16)
-    if rgba.shape[2] == 4:
-        im = np.copy(rgba[:,:,:3])
-        alpha = rgba[:,:,3]
-        I = np.where(alpha == 0)
-        im[I[0], I[1], :] = 0
-    else:
-        im = rgba
-
-    im_orig = im.astype(np.float32, copy=True)
-    im_orig -= cfg.PIXEL_MEANS
-    im_scale = 1.0
-    # im = im_orig
-
-    im = cv2.imread(roidb[i]['label'], cv2.IMREAD_UNCHANGED)
-
-    meta_data = sio.loadmat(roidb[i]['meta_data'])
-    class_colors = roidb[i]['class_colors']
-    class_weights = roidb[i]['class_weights']
-    # im_cls, im_labels = _process_label_image(im, class_colors, class_weights)
-
-    from transforms3d.quaternions import mat2quat
-
-    poses = meta_data['poses']
-    num = poses.shape[2]
-    qt = np.zeros((num, 13), dtype=np.float32)
-    for j in xrange(num):
-        R = poses[:, :3, j]
-        T = poses[:, 3, j]
-
-        qt[j, 0] = i
-        qt[j, 1] = meta_data['cls_indexes'][j, 0]
-        qt[j, 2:6] = 0  # fill box later, roidb[i]['boxes'][j, :]
-        qt[j, 6:10] = mat2quat(R)
-        qt[j, 10:] = T
-
-    pose_blob = np.concatenate((pose_blob, qt), axis=0)
-
-    labels = cv2.imread(roidb[i]['label'], cv2.IMREAD_UNCHANGED)
-    center = meta_data['center']
-    cls_indexes = meta_data['cls_indexes']
+    # sess = tf.Session()
+    # sess.run(tf.global_variables_initializer())
+    # sess.run(net.enqueue_op, feed_dict=feed_dict)
