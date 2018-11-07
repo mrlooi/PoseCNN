@@ -656,6 +656,7 @@ void HoughVotingLaucher(OpKernelContext* context,
     if (array_sizes_host[c] > labelThreshold)
     {
       class_indexes_host[count] = c;
+      // printf("Class %d) %d (labels count: %d)\n", c, count, array_sizes_host[c]);
       count++;
     }
     // else
@@ -755,6 +756,7 @@ void HoughVotingLaucher(OpKernelContext* context,
     {
       float *hmax = thrust::max_element(thrust::device, hough_space + i * height * width, hough_space + (i+1) * height * width);
       max_indexes_host[i] = hmax - hough_space;
+      // printf("Max indexes %d) %d\n", i, max_indexes_host[i]);
     }
     cudaMemcpy(num_max, &count, sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(max_indexes, max_indexes_host, count * sizeof(int), cudaMemcpyHostToDevice);
