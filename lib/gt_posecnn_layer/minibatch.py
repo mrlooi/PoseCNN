@@ -168,7 +168,9 @@ def _get_label_blob(roidb, num_classes, im_scales):
         if len(poses.shape) == 2:
             poses = np.reshape(poses, (3, 4, 1))
 
-        center_targets, center_weights = _vote_centers(im, cls_indexes, im_scale * meta_data['center'], poses, num_classes)
+        poses_z_log = poses.copy()
+        poses_z_log[2,3,:] = np.log(poses_z_log[2,3,:])
+        center_targets, center_weights = _vote_centers(im, cls_indexes, im_scale * meta_data['center'], poses_z_log, num_classes)
         processed_vertex_targets.append(center_targets)
         processed_vertex_weights.append(center_weights)
 

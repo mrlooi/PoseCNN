@@ -155,7 +155,9 @@ def render_one(data_queue, intrinsic_matrix, extents, points):
 def render(data_queue, intrinsic_matrix, points):
 
     synthesizer = libsynthesizer.Synthesizer(cfg.CAD, cfg.POSE)
+    print("SETTING UP SYNTHESIZER..")
     synthesizer.setup(cfg.TRAIN.SYN_WIDTH, cfg.TRAIN.SYN_HEIGHT)
+    print("DONE SYNTHESIZER SETUP")
 
     height = cfg.TRAIN.SYN_HEIGHT
     width = cfg.TRAIN.SYN_WIDTH
@@ -267,8 +269,8 @@ if __name__ == '__main__':
     if args.cfg_file is not None:
         cfg_from_file(args.cfg_file)
 
-    print('Using config:')
-    pprint.pprint(cfg)
+    # print('Using config:')
+    # pprint.pprint(cfg)
 
     if not args.randomize:
         # fix the random seeds (numpy and caffe) for reproducibility

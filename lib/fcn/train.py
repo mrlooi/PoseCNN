@@ -211,32 +211,31 @@ class SolverWrapper(object):
         # train_writer = tf.summary.FileWriter(self.output_dir, sess.graph)
 
         coord = tf.train.Coordinator()
-        if cfg.TRAIN.VISUALIZE:
-            load_and_enqueue(sess, self.net, data_layer, coord)
-        else:
-            t = threading.Thread(target=load_and_enqueue, args=(sess, self.net, data_layer, coord))
-            t.start()
 
         # intialize variables
         sess.run(tf.global_variables_initializer())
-        if self.pretrained_model is not None:
-            print ('Loading pretrained model '
-                   'weights from {:s}').format(self.pretrained_model)
-            self.net.load(self.pretrained_model, sess, True)
-
         if self.pretrained_ckpt is not None:
             print ('Loading pretrained ckpt '
                    'weights from {:s}').format(self.pretrained_ckpt)
             self.restore(sess, self.pretrained_ckpt)
+        elif self.pretrained_model is not None:
+            print ('Loading pretrained model '
+                   'weights from {:s}').format(self.pretrained_model)
+            self.net.load(self.pretrained_model, sess, True)
 
         tf.get_default_graph().finalize()
 
+        # if cfg.TRAIN.VISUALIZE:
+        #     load_and_enqueue(sess, self.net, data_layer, coord)
+        # else:
+        t = threading.Thread(target=load_and_enqueue, args=(sess, self.net, data_layer, coord))
+        t.start()
         # tf.train.write_graph(sess.graph_def, self.output_dir, 'model.pbtxt')
 
         last_snapshot_iter = -1
         timer = Timer()
         for iter in range(max_iters):
-
+            print(iter)
             timer.tic()
             loss_value, loss_cls_value, loss_vertex_value, loss_pose_value, lr, _ = sess.run([loss, loss_cls, loss_vertex, loss_pose, learning_rate, train_op])
             # train_writer.add_summary(summary, iter)
@@ -386,6 +385,7 @@ def load_and_enqueue(sess, net, data_layer, coord):
     while not coord.should_stop():
         blobs = data_layer.forward(iter)
         iter += 1
+        print(iter)
 
         if cfg.INPUT == 'RGBD':
             data_blob = blobs['data_image_color']
@@ -541,6 +541,7 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
 
         # data layer
         if cfg.TRAIN.SINGLE_FRAME:
+            print(imdb.data_queue)
             data_layer = GtSynthesizeLayer(roidb, imdb.num_classes, imdb._extents, imdb._points_all, imdb._symmetry, imdb.cache_path, imdb.name, imdb.data_queue, cfg.CAD, cfg.POSE)
         else:
             data_layer = GtDataLayer(roidb, imdb.num_classes)

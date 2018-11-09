@@ -21,3 +21,5 @@ build
 lib/*.c
 *.npy
 *.pth
+*.bk
+*.xyz
