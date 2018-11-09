@@ -75,12 +75,19 @@ def average_distance_loss_func(poses_pred, poses_target, poses_weight, points, s
 
     return AverageDistanceLoss(num_classes, margin)(poses_pred, poses_target, poses_weight, points, symmetry)
 
-def T(x, dtype=torch.float32):
-    return torch.tensor(x, dtype=dtype, requires_grad=True)
-def FT(x):
-    return T(x)
-def IT(x):
-    return T(x, torch.int32)
+def T(x, dtype=torch.float32, requires_grad=False):
+    return torch.tensor(x, dtype=dtype, requires_grad=requires_grad)
+def FT(x, requires_grad=False):
+    return T(x, requires_grad=requires_grad)
+def IT(x, requires_grad=False):
+    return T(x, torch.int32, requires_grad=requires_grad)
+
+def CT(x, dtype=torch.float32, requires_grad=False):
+    return torch.tensor(x, dtype=dtype, requires_grad=requires_grad, device="cuda")
+def FCT(x, requires_grad=False):
+    return CT(x, requires_grad=requires_grad)
+def ICT(x, requires_grad=False):
+    return CT(x, dtype=torch.int32, requires_grad=requires_grad)
 
 if __name__ == '__main__':
     import tensorflow as tf
@@ -107,16 +114,25 @@ if __name__ == '__main__':
     width = 640
     height = 480
 
-    TCF = lambda x: FT(x).cuda()
-    TCI = lambda x: IT(x).cuda()
+
     prob = F.log_softmax(T(score), 3)
     prob_normalized = F.softmax(T(score), 3)
     hard_label_tf = hard_label_func(prob_normalized.detach().numpy(), labels)
 
-    sess = tf.Session()
+    sess = tf.Session(config=tf.ConfigProto(device_count = {'GPU': 0}))
     hard_label = sess.run(hard_label_tf)
 
-    loss_cls = loss_cross_entropy_single_frame(prob, T(hard_label))
-    loss_vertex = VERTEX_W * smooth_l1_loss_vertex(T(vertex_pred), T(vertex_targets), T(vertex_weights))
-    loss_pose = POSE_W * average_distance_loss_func(TCF(poses_pred), TCF(poses_targets), TCF(poses_weights), TCF(points), TCI(symmetry), num_classes, margin=0.01)[0]
+    t_hl = FT(hard_label, True)
+    t_vp = FT(vertex_pred, True)
+    t_vt = FT(vertex_targets)
+    t_vw = FT(vertex_weights)
+    t_pp = FCT(poses_pred, True)
+    t_pt = FCT(poses_targets)
+    t_pw = FCT(poses_weights)
+    t_pts = FCT(points)
+    t_sym = FCT(symmetry)
+
+    # loss_cls = loss_cross_entropy_single_frame(prob, t_hl)
+    # loss_vertex = VERTEX_W * smooth_l1_loss_vertex(t_vp, t_vt, t_vw)
+    loss_pose = POSE_W * average_distance_loss_func(t_pp, t_pt, t_pw, t_pts, t_sym, num_classes, margin=0.01)
 

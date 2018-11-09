@@ -134,5 +134,5 @@ if __name__ == '__main__':
         poses_pred_ph: poses_pred
     }
 
-    g, lcls, lvertex, lpose = sess.run([tf.gradients(loss_pose, vertex_pred_ph), loss_cls, loss_vertex, loss_pose], feed_dict=feed_dict)
+    ppg, lcls, lvertex, lpose = sess.run([tf.gradients(loss_pose, poses_pred_ph), loss_cls, loss_vertex, loss_pose], feed_dict=feed_dict)
     
