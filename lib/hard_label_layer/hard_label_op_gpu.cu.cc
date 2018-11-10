@@ -74,6 +74,7 @@ bool HardlabelBackwardLaucher(const float* top_diff, const int batch_size, const
                        kThreadsPerBlock, 0, d.stream()>>>(
       output_size, num_classes, bottom_diff_prob, bottom_diff_gt);
 
+  cudaDeviceSynchronize();
   err = cudaGetLastError();
   if(cudaSuccess != err)
   {

@@ -106,7 +106,7 @@ class HardlabelOp : public OpKernel {
           for (int c = 0; c < num_classes; c++)
             top_data(index_pixel * num_classes + c) = 0.0;
 
-          if (prob < threshold_)
+          if (label_gt != -1 && (label_gt > 0 || prob < threshold_))
             top_data(index_pixel * num_classes + label_gt) = 1.0;
         }
       }
