@@ -1,7 +1,6 @@
 import numpy as np
 import cv2
 
-import tensorflow as tf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -135,9 +134,9 @@ class PoseCNN(nn.Module):
     def _get_conv_transpose2d(self, in_cn, out_cn, kernel_size, stride=(1,1), padding=0, trainable=False):
         x = nn.ConvTranspose2d(in_cn, out_cn, kernel_size=kernel_size, stride=stride, padding=padding)
         x.bias.data.zero_()
-        if not trainable:
-            for p in x.parameters():
-                p.requires_grad = False
+        # if not trainable:
+        #     for p in x.parameters():
+        #         p.requires_grad = False
         return x
 
     def semantic_mask_layer(self, conv4, conv5):
@@ -312,7 +311,7 @@ def test_model(model, num_classes):
 def get_meta_info(num_classes):
     im_scale = 1
     batch_sz = 1
-    root_dir = "/home/vincent/Documents/py/ml/PoseCNN/data"
+    root_dir = "/home/vincent/Documents/deep_learning/PoseCNN/data"
     # extents blob
     extent_file = root_dir + "/LOV/extents.txt"
     extents = np.zeros((num_classes, 3), dtype=np.float32)
@@ -333,6 +332,7 @@ def get_meta_info(num_classes):
     return extents, poses, mdata
 
 if __name__ == '__main__':
+    import tensorflow as tf
 
     num_classes = 22
     num_units = 64
@@ -344,7 +344,7 @@ if __name__ == '__main__':
 
     from model2 import vgg_test_net
     model_file = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
-    net = vgg_test_net(num_classes, num_units)#, threshold_label, voting_threshold, vertex_reg_2d, pose_reg, trainable, is_train)
+    net = vgg_test_net(num_classes, num_units, trainable=True, is_train=True) #, threshold_label, voting_threshold, vertex_reg_2d, pose_reg, trainable, is_train)
 
     saver = tf.train.Saver()
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.4)
@@ -382,7 +382,8 @@ if __name__ == '__main__':
         model.load_state_dict(state_dict)
         # torch.save(state_dict, "posecnn.pth")
 
-    load_model(model)
+    model.load_state_dict(torch.load("posecnn.pth"))
+    # load_model(model)
     model.cuda()
     model.eval()
 
