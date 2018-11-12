@@ -34,7 +34,8 @@ def load_cfg(args):
 
     cfg.USE_FLIPPED = False
 
-    cfg.TRAIN.LEARNING_RATE = 0.0001
+    cfg.TRAIN.LEARNING_RATE = 0.0003
+    cfg.TRAIN.SNAPSHOT_ITERS = 500
 
 def get_lov2d_args():
     class Args():
@@ -42,9 +43,10 @@ def get_lov2d_args():
 
     args = Args()
     args.gpu_id = 0
-    args.max_iters = 40
-    args.pretrained_model = "/data/models/vgg16.pth"
-    args.pretrained_ckpt = "posecnn.pth"
+    args.max_iters = 1000
+    args.pretrained_model = "/data/models/pytorch/vgg16.pth"
+    args.pretrained_ckpt = None#"posecnn.pth"
+    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_100.pth"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
     args.imdb_name = "lov_debug"
     args.randomize = False
@@ -57,7 +59,7 @@ def get_lov2d_args():
 def get_network():
     from convert_to_pth import PoseCNN
     return PoseCNN(cfg.TRAIN.NUM_UNITS, cfg.TRAIN.NUM_CLASSES, \
-                                                     cfg.TRAIN.THRESHOLD_LABEL, cfg.TRAIN.VOTING_THRESHOLD, cfg.IS_TRAIN)
+                                                     500, cfg.TRAIN.VOTING_THRESHOLD, cfg.IS_TRAIN)
 
 
 def get_training_roidb(imdb):
@@ -135,22 +137,21 @@ def get_losses(network, blobs, num_classes):
     poses_target, poses_weight = hough_outputs[2:4]
 
     # cls loss
-    prob = F.log_softmax(scores, 1).permute((0,2,3,1)) # permute for hard_label_func, which is in BHWC format
-    prob_n = F.softmax(scores, 1).permute((0,2,3,1)) # permute for hard_label_func, which is in BHWC format
-    hard_labels = hard_label_func(prob_n, blob_labels)
+    prob = F.log_softmax(scores, 1).permute((0,2,3,1)).clone() # permute for hard_label_func, which is in BHWC format
+    prob_n = F.softmax(scores, 1).permute((0,2,3,1)).clone() # permute for hard_label_func, which is in BHWC format
+    hard_labels = hard_label_func(prob_n, blob_labels, threshold=1.0)
     loss_cls = loss_cross_entropy_single_frame(prob, hard_labels)
 
     # vertex loss
     loss_vertex = cfg.TRAIN.VERTEX_W * smooth_l1_loss_vertex(vertex_pred, vertex_targets, vertex_weights)
 
-    # pose loss
-    poses_mul = torch.mul(poses_tanh, poses_weight)
-    poses_pred = F.normalize(poses_mul, p=2, dim=1)
-
-    loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
+    # # pose loss
+    # poses_mul = torch.mul(poses_tanh, poses_weight)
+    # poses_pred = F.normalize(poses_mul, p=2, dim=1)
+    # loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
+    loss_pose = FCT(0)
 
     loss_regu = 0 # TODO: tf.add_n(tf.losses.get_regularization_losses(), 'regu')
-
     loss = loss_cls + loss_vertex + loss_pose + loss_regu
 
     return loss, loss_cls, loss_vertex, loss_pose
