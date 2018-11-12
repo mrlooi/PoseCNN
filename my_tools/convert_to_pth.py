@@ -17,17 +17,17 @@ from roi_pooling.modules.roi_pool import _RoIPooling
 from hough_voting.modules.hough_voting import HoughVoting
 
 class PoseCNN(nn.Module):
-    def __init__(self, num_units, num_classes):
+    def __init__(self, num_units, num_classes, label_threshold=500, vote_threshold=-1.0, is_train=False):
         super(PoseCNN, self).__init__()
 
         self.num_units = num_units
         self.num_classes = num_classes
         self.is_train = False
 
-        self.vote_threshold = -1.0
+        self.label_threshold = label_threshold
+        self.vote_threshold = vote_threshold
         self.vote_percentage = 0.02
         self.skip_pixels = 20
-        self.label_threshold = 500
         self.inlier_threshold = 0.9
 
         inplace = True
@@ -147,9 +147,9 @@ class PoseCNN(nn.Module):
         add_score = torch.add(sc_conv4, upsc_conv5)
         upscore = self.upscore(add_score)
         score = self.score(upscore)
-        softmax = F.softmax(score)
+        softmax = F.softmax(score, 1)
         label2d = torch.argmax(softmax, dim=1)
-        return softmax, label2d
+        return score, label2d
 
     def vertex_reg_layer(self, conv4, conv5):
         sc_conv4 = self.score_conv4_vertex(conv4)
@@ -167,11 +167,14 @@ class PoseCNN(nn.Module):
     def pose_reg_layer(self, conv4, conv5, rois_raw):
         # rois_raw from hough_voting: batch_index, cls, x1, y1, x2, y2, max_hough_idx
         h, w = self.roi_pool_dims
-        n, rs = rois_raw.shape
-        assert rs == 7
-        rois = rois_raw.new(n,5)
-        rois[:,0] = rois_raw[:,0]
-        rois[:,1:] = rois_raw[:,2:-1]
+        if rois_raw.shape[0] == 0:
+            rois = rois_raw.new(1,5).zero_() #.new(0,5)
+        else:
+            n, rs = rois_raw.shape
+            assert rs == 7
+            rois = rois_raw.new(n,5)
+            rois[:,0] = rois_raw[:,0]
+            rois[:,1:] = rois_raw[:,2:-1]
 
         rp1 = self.roi_pool1(conv5, rois)  # B,C,H,W  (B,512,7,7)
         rp2 = self.roi_pool2(conv4, rois)  # B,C,H,W  (B,512,7,7)
@@ -183,21 +186,38 @@ class PoseCNN(nn.Module):
 
     def forward_image(self, x):
         c4, c5 = self.features(x)
-        softmax, label_2d = self.semantic_mask_layer(c4, c5)
+        _, label_2d = self.semantic_mask_layer(c4, c5)
         vertex_pred = self.vertex_reg_layer(c4, c5)
 
         return label_2d, vertex_pred
 
     def forward(self, x, extents, poses, mdata):
         c4, c5 = self.features(x)
-        softmax, label_2d = self.semantic_mask_layer(c4, c5)
+        score, label_2d = self.semantic_mask_layer(c4, c5)
         vertex_pred = self.vertex_reg_layer(c4, c5)
         hough_outputs = self.run_hough_voting(label_2d, vertex_pred, extents, poses, mdata)
         rois = hough_outputs[0]
         pose_reg = self.pose_reg_layer(c4, c5, rois)
         # out = out.view(out.size(0), -1)
         # out = self.fc(out)
-        return label_2d, vertex_pred, hough_outputs, pose_reg
+        return score, label_2d, vertex_pred, hough_outputs, pose_reg
+
+    def load_pretrained(self, model_file):
+        m = torch.load(model_file)
+        mk = m.keys()[:26]
+        sd = self.state_dict()
+        sdk = sd.keys()
+
+        print("Loading pretrained model %s..."%(model_file))
+        for ix,k in enumerate(mk):
+            md = m[k]
+            sk = sdk[ix]
+            d = sd[sk]
+            assert d.shape == md.shape
+            print("%s -> %s [%s]"%(k, sk, str(d.shape)))
+            sd[sk] = md
+        self.load_state_dict(sd)
+        print("Loaded pretrained model %s"%(model_file))
 
 def posecnn_pth_to_tf_mapping():
     return {

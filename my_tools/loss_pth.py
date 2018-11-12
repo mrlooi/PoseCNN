@@ -19,11 +19,11 @@ import hard_label_layer.hard_label_op_grad
 
 def loss_cross_entropy_single_frame(scores, labels):
     """
-    scores: a tensor [batch_size, num_classes, height, width]
-    labels: a tensor [batch_size, num_classes, height, width]
+    scores: a tensor [batch_size, height, width, num_classes]
+    labels: a tensor [batch_size, height, width, num_classes]
     """
     cross_entropy = -torch.sum(labels * scores, 3)
-    loss = torch.div( torch.sum(cross_entropy), torch.sum(labels).float())
+    loss = torch.div( torch.sum(cross_entropy), torch.sum(labels) + 1e-10)
 
     return loss
 
@@ -39,7 +39,7 @@ def smooth_l1_loss_vertex(vertex_pred, vertex_targets, vertex_weights, sigma=1.0
     # smoothL1_sign = tf.stop_gradient(tf.to_float(tf.less(abs_diff, 1. / sigma_2)))
     in_loss = torch.pow(diff, 2) * (sigma_2 / 2.) * smoothL1_sign \
             + (abs_diff - (0.5 / sigma_2)) * (1. - smoothL1_sign)
-    loss = torch.div( torch.sum(in_loss), torch.sum(vertex_weights).float() )
+    loss = torch.div( torch.sum(in_loss), torch.sum(vertex_weights) + 1e-10 )
     return loss
 
 def hard_label_func_tf(prob_normalized, gt_label_2d, threshold=1.0):
@@ -79,7 +79,7 @@ def ICT(x, requires_grad=False):
 
 def get_error(d1, d2):
     e = np.abs(d1-d2)
-    print(np.sum(e))
+    return np.sum(e)
 
 gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.1)
 gpu_config = tf.ConfigProto(allow_soft_placement=True, gpu_options=gpu_options)
@@ -114,18 +114,49 @@ if __name__ == '__main__':
     width = 640
     height = 480
 
+    sess = tf.Session(config=gpu_config)
+
+    def hard_label_test():
+        # PTH
+        pth_score = FCT(score, True) 
+        pth_labels = ICT(labels)
+        pth_prob_n = F.softmax(pth_score, 3)
+        pth_hl = hard_label_func(pth_prob_n, pth_labels)
+        pth_hl.sum().backward()
+        pth_g = pth_score.grad.cpu().numpy()
+
+        # TF 
+        tf_score = tf.Variable(score)
+        tf_labels = tf.Variable(labels)
+        tf_prob_n = tf.nn.softmax(tf_score, 3)  
+        # tf_hl = hard_label_func_tf(tf_prob_n, tf_labels)
+        tf_hl = hard_label_func_tf(pth_prob_n.data.cpu().numpy(), tf_labels)
+        
+        tf_g = tf.gradients(tf.reduce_sum(tf_hl), tf_score)
+        sess.run(tf.global_variables_initializer())
+
+        # COMPARE
+        print(get_error(sess.run(tf_prob_n),pth_prob_n.detach().cpu().numpy()))
+        print(get_error(sess.run(tf_hl),pth_hl.detach().cpu().numpy()))
+        print(get_error(sess.run(tf_g),pth_g))
+    
     t_score = FCT(score, True)
     prob = F.log_softmax(t_score, 3)
     prob_normalized = F.softmax(t_score, 3)
     label_2d = torch.argmax(prob_normalized, dim=3)
     # label_2d = FCT(label_2d, True)
-    hard_label_tf = hard_label_func_tf(prob_normalized.clone().detach().cpu().numpy(), labels)
+    pn_pth = prob_normalized
+    pn_tf = tf.Variable(pn_pth.detach().cpu().numpy())
+    labels_tf = tf.Variable(labels)
+    hard_label_tf = hard_label_func_tf(pn_tf, labels_tf)
 
-    sess = tf.Session(config=cpu_config)
     sess.run(tf.global_variables_initializer())
     hl_tf = sess.run(hard_label_tf)
-    hl_pth = hard_label_func(prob_normalized, ICT(labels)).detach().cpu().numpy()
-    get_error(hl_tf, hl_pth)
+    hl_pth = hard_label_func(pn_pth, ICT(labels))
+
+    get_error(hl_tf, hl_pth.detach().cpu().numpy())
+    hl_pth.sum().backward()
+    # get_error(sess.run(tf.gradients(tf.reduce_sum(hard_label_tf), pn_tf)), t_score.grad.cpu().numpy())
 
     # loss cross entropy
     t_hl = FCT(hl_tf, True)
@@ -147,10 +178,11 @@ if __name__ == '__main__':
     hough_outputs = run_hough_voting(num_classes, label_2d, t_vp, t_extents, t_pgt, t_meta)
     t_pt, t_pw = hough_outputs[2:4]
 
-    # loss_cls = loss_cross_entropy_single_frame(prob, t_hl)
-    # loss_vertex = VERTEX_W * smooth_l1_loss_vertex(t_vp, t_vt, t_vw)
+    loss_cls = loss_cross_entropy_single_frame(prob, t_hl)
+    loss_vertex = VERTEX_W * smooth_l1_loss_vertex(t_vp, t_vt, t_vw)
     loss_pose = POSE_W * average_distance_loss_func(t_pp, t_pt, t_pw, t_pts, t_sym, num_classes, margin=0.01)
 
-    loss_pose.backward()
-    g_tvp = t_vp.grad.cpu().numpy()
-    assert np.sum(g_tvp) == 0
+    # loss_pose.backward()
+    # g_tvp = t_vp.grad.cpu().numpy()
+    # assert np.sum(g_tvp) == 0
+
