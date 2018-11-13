@@ -16,12 +16,12 @@ from roi_pooling.modules.roi_pool import _RoIPooling
 from hough_voting.modules.hough_voting import HoughVoting
 
 class PoseCNN(nn.Module):
-    def __init__(self, num_units, num_classes, label_threshold=500, vote_threshold=-1.0, is_train=False):
+    def __init__(self, num_units, num_classes, label_threshold=500, vote_threshold=-1.0, is_train=False, keep_prob=1.0):
         super(PoseCNN, self).__init__()
 
         self.num_units = num_units
         self.num_classes = num_classes
-        self.is_train = False
+        self.is_train = is_train
 
         self.label_threshold = label_threshold
         self.vote_threshold = vote_threshold
@@ -30,6 +30,8 @@ class PoseCNN(nn.Module):
         self.inlier_threshold = 0.9
 
         inplace = True
+
+        drop_prob = 1.0 - keep_prob if is_train else 0.0
 
         self.max_pool2d = nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
         self.conv1 = nn.Sequential(
@@ -117,8 +119,11 @@ class PoseCNN(nn.Module):
         self.poses_fc = nn.Sequential(
             nn.Linear(h*w*512,4096),
             nn.ReLU(inplace),
+            # nn.Dropout(p=drop_prob),
             nn.Linear(4096,4096),
             nn.ReLU(inplace),
+            # nn.Dropout(p=drop_prob),
+            # self.dropout,
             nn.Linear(4096,4 * self.num_classes)
         )
 
@@ -311,7 +316,7 @@ def test_model(model, num_classes):
 def get_meta_info(num_classes):
     im_scale = 1
     batch_sz = 1
-    root_dir = "/home/vincent/Documents/deep_learning/PoseCNN/data"
+    root_dir = "/home/vincent/Documents/py/ml/PoseCNN/data"
     # extents blob
     extent_file = root_dir + "/LOV/extents.txt"
     extents = np.zeros((num_classes, 3), dtype=np.float32)
