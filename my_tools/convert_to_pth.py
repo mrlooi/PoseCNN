@@ -15,6 +15,14 @@ sys.path.append("lib/model")
 from roi_pooling.modules.roi_pool import _RoIPooling
 from hough_voting.modules.hough_voting import HoughVoting
 
+def truncated_normal_(tensor, mean=0.0, std=1.0):
+    size = tensor.shape
+    tmp = tensor.new_empty(size + (4,)).normal_()
+    valid = (tmp < 2) & (tmp > -2)
+    ind = valid.max(-1, keepdim=True)[1]
+    tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
+    tensor.data.mul_(std).add_(mean)
+
 class PoseCNN(nn.Module):
     def __init__(self, num_units, num_classes, label_threshold=500, vote_threshold=-1.0, is_train=False, keep_prob=1.0):
         super(PoseCNN, self).__init__()
@@ -32,6 +40,7 @@ class PoseCNN(nn.Module):
         inplace = True
 
         drop_prob = 1.0 - keep_prob if is_train else 0.0
+        self.drop_prob = drop_prob
 
         self.max_pool2d = nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
         self.conv1 = nn.Sequential(
@@ -116,16 +125,23 @@ class PoseCNN(nn.Module):
         h, w = self.roi_pool_dims
         self.roi_pool1 = _RoIPooling(h,w,1.0/16)  # from conv5_3
         self.roi_pool2 = _RoIPooling(h,w,1.0/8)  # from conv4_3
-        self.poses_fc = nn.Sequential(
-            nn.Linear(h*w*512,4096),
-            nn.ReLU(inplace),
-            # nn.Dropout(p=drop_prob),
-            nn.Linear(4096,4096),
-            nn.ReLU(inplace),
-            # nn.Dropout(p=drop_prob),
-            # self.dropout,
-            nn.Linear(4096,4 * self.num_classes)
-        )
+
+        self.poses_fc1 = self._get_fc_layer(h*w*512,4096)
+        self.poses_fc2 = self._get_fc_layer(4096,4096)
+        self.poses_fc3 = self._get_fc_layer(4096, 4*self.num_classes)
+
+        # self.poses_fc = nn.Sequential(
+        #     # nn.Linear(h*w*512,4096),
+        #     self._get_fc_layer(h*w*512,4096),
+        #     nn.ReLU(inplace),
+        #     nn.Dropout(p=drop_prob),
+        #     # nn.Linear(4096,4096),
+        #     self._get_fc_layer(4096,4096),
+        #     nn.ReLU(inplace),
+        #     nn.Dropout(p=drop_prob),
+        #     # self.dropout,
+        #     nn.Linear(4096,4 * self.num_classes)
+        # )
 
 
     def features(self, x):
@@ -142,6 +158,12 @@ class PoseCNN(nn.Module):
         # if not trainable:
         #     for p in x.parameters():
         #         p.requires_grad = False
+        return x
+
+    def _get_fc_layer(self, in_cn, out_cn):
+        x = nn.Linear(in_cn, out_cn)
+        x.bias.data.zero_()
+        truncated_normal_(x.weight, 0.0, 0.001)
         return x
 
     def semantic_mask_layer(self, conv4, conv5):
@@ -185,8 +207,17 @@ class PoseCNN(nn.Module):
         rp = torch.add(rp1, rp2)
         # print(rp.shape)
         rp_flat = rp.view(-1, h*w*512)
-        fc = self.poses_fc(rp_flat)
-        return F.tanh(fc)
+        # fc = self.poses_fc(rp_flat)
+        fc1 = self.poses_fc1(rp_flat)
+        fc1 = F.normalize(fc1, p=2, dim=1)
+        fc1 = F.dropout(F.relu(fc1), self.drop_prob, training=self.is_train)
+        fc2 = self.poses_fc2(fc1)
+        fc2 = F.normalize(fc2, p=2, dim=1)
+        fc2 = F.dropout(F.relu(fc2), self.drop_prob, training=self.is_train)
+        fc3 = self.poses_fc3(fc2)
+        fc3 = F.normalize(fc3, p=2, dim=1)
+
+        return F.tanh(fc3)
 
     def forward_image(self, x):
         c4, c5 = self.features(x)
@@ -316,7 +347,7 @@ def test_model(model, num_classes):
 def get_meta_info(num_classes):
     im_scale = 1
     batch_sz = 1
-    root_dir = "/home/vincent/Documents/py/ml/PoseCNN/data"
+    root_dir = "/home/vincent/Documents/deep_learning/PoseCNN/data"
     # extents blob
     extent_file = root_dir + "/LOV/extents.txt"
     extents = np.zeros((num_classes, 3), dtype=np.float32)

@@ -43,10 +43,10 @@ def get_lov2d_args():
 
     args = Args()
     args.gpu_id = 0
-    args.max_iters = 1000
+    args.max_iters = 400
     args.pretrained_model = "/data/models/pytorch/vgg16.pth"
     args.pretrained_ckpt = None#"posecnn.pth"
-    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_100.pth"
+    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_500.pth"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
     args.imdb_name = "lov_debug"
     args.randomize = False
@@ -59,7 +59,7 @@ def get_lov2d_args():
 def get_network():
     from convert_to_pth import PoseCNN
     return PoseCNN(cfg.TRAIN.NUM_UNITS, cfg.TRAIN.NUM_CLASSES, \
-                                                     500, cfg.TRAIN.VOTING_THRESHOLD, cfg.IS_TRAIN)
+                                                     500, cfg.TRAIN.VOTING_THRESHOLD, cfg.IS_TRAIN, 0.5)
 
 
 def get_training_roidb(imdb):
@@ -145,11 +145,11 @@ def get_losses(network, blobs, num_classes):
     # vertex loss
     loss_vertex = cfg.TRAIN.VERTEX_W * smooth_l1_loss_vertex(vertex_pred, vertex_targets, vertex_weights)
 
-    # # pose loss
-    # poses_mul = torch.mul(poses_tanh, poses_weight)
-    # poses_pred = F.normalize(poses_mul, p=2, dim=1)
-    # loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
-    loss_pose = FCT(0)
+    # pose loss
+    poses_mul = torch.mul(poses_tanh, poses_weight)
+    poses_pred = F.normalize(poses_mul, p=2, dim=1)
+    loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
+    # loss_pose = FCT(0)
 
     loss_regu = 0 # TODO: tf.add_n(tf.losses.get_regularization_losses(), 'regu')
     loss = loss_cls + loss_vertex + loss_pose + loss_regu
@@ -178,7 +178,9 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     # optimizer
     start_lr = cfg.TRAIN.LEARNING_RATE
     momentum = cfg.TRAIN.MOMENTUM
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad,network.parameters()), lr=start_lr)
+    optimizer = optim.Adam(network.parameters(), lr=start_lr, weight_decay=cfg.TRAIN.WEIGHT_REG)
+    # optimizer = optim.SGD(filter(lambda p: p.requires_grad,network.parameters()), lr=start_lr, momentum=momentum, weight_decay=cfg.TRAIN.WEIGHT_REG)
+    # optimizer = optim.SGD(filter(lambda p: p.requires_grad,network.parameters()), lr=start_lr, momentum=momentum)
     lr = start_lr
 
     # global_step = tf.Variable(0, trainable=False)
