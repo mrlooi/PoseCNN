@@ -15,14 +15,6 @@ sys.path.append("lib/model")
 from roi_pooling.modules.roi_pool import _RoIPooling
 from hough_voting.modules.hough_voting import HoughVoting
 
-def truncated_normal_(tensor, mean=0.0, std=1.0):
-    size = tensor.shape
-    tmp = tensor.new_empty(size + (4,)).normal_()
-    valid = (tmp < 2) & (tmp > -2)
-    ind = valid.max(-1, keepdim=True)[1]
-    tensor.data.copy_(tmp.gather(-1, ind).squeeze(-1))
-    tensor.data.mul_(std).add_(mean)
-
 class PoseCNN(nn.Module):
     def __init__(self, num_units, num_classes, label_threshold=500, vote_threshold=-1.0, is_train=False, keep_prob=1.0):
         super(PoseCNN, self).__init__()
@@ -163,7 +155,7 @@ class PoseCNN(nn.Module):
     def _get_fc_layer(self, in_cn, out_cn):
         x = nn.Linear(in_cn, out_cn)
         x.bias.data.zero_()
-        truncated_normal_(x.weight, 0.0, 0.001)
+        nn.init.normal_(x.weight, 0.0, 0.001)
         return x
 
     def semantic_mask_layer(self, conv4, conv5):
