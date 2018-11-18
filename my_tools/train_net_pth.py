@@ -2,6 +2,9 @@ import time, os, sys
 import os.path as osp
 import numpy as np
 
+from Queue import Queue
+from threading import Thread
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,6 +39,8 @@ def load_cfg(args):
 
     cfg.TRAIN.LEARNING_RATE = 0.0003
     cfg.TRAIN.SNAPSHOT_ITERS = 500
+    cfg.TRAIN.USE_FLIPPED = True
+    cfg.TRAIN.IMS_PER_BATCH = 1
 
 def get_lov2d_args():
     class Args():
@@ -43,10 +48,10 @@ def get_lov2d_args():
 
     args = Args()
     args.gpu_id = 0
-    args.max_iters = 400
-    args.pretrained_model = "/data/models/pytorch/vgg16.pth"
+    args.max_iters = 100
+    args.pretrained_model = "/data/models/vgg16.pth"
     args.pretrained_ckpt = None#"posecnn.pth"
-    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_500.pth"
+    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_100.pth"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
     args.imdb_name = "lov_debug"
     args.randomize = False
@@ -64,10 +69,10 @@ def get_network():
 
 def get_training_roidb(imdb):
     """Returns a roidb (Region of Interest database) for use in training."""
-    if cfg.TRAIN.USE_FLIPPED:
-        print 'Appending horizontally-flipped training examples...'
-        imdb.append_flipped_images()
-        print 'done'
+    # if cfg.TRAIN.USE_FLIPPED:
+    #     print 'Appending horizontally-flipped training examples...'
+    #     imdb.append_flipped_images()
+    #     print 'done'
 
     return imdb.roidb
 
@@ -121,18 +126,37 @@ def FCT(x, requires_grad=False):
 def ICT(x, requires_grad=False):
     return CT(x, dtype=torch.int32, requires_grad=requires_grad)
 
+def fetch_data(q, data_layer, sleep_time=None):
+    while True:
+        blobs = data_layer.forward()
+        blobs['data_image_color'] = FCT(transpose_BHWC_to_BCHW(blobs['data_image_color']))
+        blobs['data_vertex_weights'] = FCT(transpose_BHWC_to_BCHW(blobs['data_vertex_weights']))
+        blobs['data_vertex_targets'] = FCT(transpose_BHWC_to_BCHW(blobs['data_vertex_targets']))
+
+        blobs['data_points'] = FCT(blobs['data_points'])
+        blobs['data_label'] = ICT(blobs['data_label'])
+        blobs['data_extents'] = FCT(blobs['data_extents'])
+        blobs['data_pose'] = FCT(blobs['data_pose'])
+        blobs['data_meta_data'] = FCT(blobs['data_meta_data'])
+        blobs['data_symmetry'] = FCT(blobs['data_symmetry'])
+
+        q.put(blobs)
+
+        if sleep_time is not None and sleep_time != 0:
+            time.sleep(sleep_time)
+
 def get_losses(network, blobs, num_classes):
-    blob_im = FCT(transpose_BHWC_to_BCHW(blobs['data_image_color']))
-    vertex_weights = FCT(transpose_BHWC_to_BCHW(blobs['data_vertex_weights']))
-    vertex_targets = FCT(transpose_BHWC_to_BCHW(blobs['data_vertex_targets']))
+    blob_im = blobs['data_image_color']
+    vertex_weights = blobs['data_vertex_weights']
+    vertex_targets = blobs['data_vertex_targets']
 
-    blob_points = FCT(blobs['data_points'])
-    blob_labels = ICT(blobs['data_label'])
-    blob_extents = FCT(blobs['data_extents'])
-    blob_poses = FCT(blobs['data_pose'])
-    blob_meta_data = FCT(blobs['data_meta_data'])
-    blob_sym = FCT(blobs['data_symmetry'])
-
+    blob_points = blobs['data_points']
+    blob_labels = blobs['data_label']
+    blob_extents = blobs['data_extents']
+    blob_poses = blobs['data_pose']
+    blob_meta_data = blobs['data_meta_data']
+    blob_sym = blobs['data_symmetry']
+    
     scores, label_2d, vertex_pred, hough_outputs, poses_tanh = network.forward(blob_im, blob_extents, blob_poses, blob_meta_data)
     poses_target, poses_weight = hough_outputs[2:4]
 
@@ -189,10 +213,25 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
 
     get_tensor_np = lambda x: x.data.cpu().numpy()
 
+    q = Queue(maxsize=10)
+    sleep_time_seconds = None
+    num_data_workers = 2
+    for i in xrange(num_data_workers):
+        worker = Thread(target=fetch_data, args=(q,data_layer,sleep_time_seconds,))
+        worker.setDaemon(True)
+        worker.start()
+
     print('Training...')
     last_snapshot_iter = 0
-    for iter in xrange(max_iters):
-        blobs = data_layer.forward(iter)
+    iter = 0
+    while iter < max_iters:
+        if q.empty():
+            sleep_s = 1
+            print("Q EMPTY, sleeping for %d seconds.."%(sleep_s))
+            time.sleep(sleep_s)
+            continue
+
+        blobs = q.get()
 
         loss, loss_cls, loss_vertex, loss_pose = get_losses(network, blobs, num_classes)
 
@@ -210,6 +249,9 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
             last_snapshot_iter = iter
             save_net(network, output_dir, iter)
 
+        iter += 1
+
+    iter -= 1
     if last_snapshot_iter != iter:
         save_net(network, output_dir, iter)
 

@@ -50,7 +50,7 @@ class GtPoseCNNLayer(object):
         return get_minibatch(minibatch_db, self._num_classes, self._extents, self._points, self._symmetry, is_symmetric)
 
 
-    def forward(self, iter_):
+    def forward(self, iter_=0):
         """Get blobs and copy them into this layer's top blob vector."""
         blobs = self._get_next_minibatch()
 
