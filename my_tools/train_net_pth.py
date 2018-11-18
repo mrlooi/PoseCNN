@@ -186,6 +186,13 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     num_classes = imdb.num_classes
     # LOAD DATA LAYER
     data_layer = GtPoseCNNLayer(roidb, num_classes, imdb._extents, imdb._points_all, imdb._symmetry)
+    q = Queue(maxsize=10)
+    sleep_time_seconds = None
+    num_data_workers = 2
+    for i in xrange(num_data_workers):
+        worker = Thread(target=fetch_data, args=(q,data_layer,sleep_time_seconds,))
+        worker.setDaemon(True)
+        worker.start()
 
     # LOAD PRETRAINED MODEL OR CKPT
     if pretrained_ckpt is not None:
@@ -213,25 +220,18 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
 
     get_tensor_np = lambda x: x.data.cpu().numpy()
 
-    q = Queue(maxsize=10)
-    sleep_time_seconds = None
-    num_data_workers = 2
-    for i in xrange(num_data_workers):
-        worker = Thread(target=fetch_data, args=(q,data_layer,sleep_time_seconds,))
-        worker.setDaemon(True)
-        worker.start()
-
     print('Training...')
     last_snapshot_iter = 0
     iter = 0
     while iter < max_iters:
         if q.empty():
-            sleep_s = 1
-            print("Q EMPTY, sleeping for %d seconds.."%(sleep_s))
+            sleep_s = 0.5
+            print("Data queue empty, sleeping for %.2f seconds.."%(sleep_s))
             time.sleep(sleep_s)
             continue
 
         blobs = q.get()
+        q.task_done()
 
         loss, loss_cls, loss_vertex, loss_pose = get_losses(network, blobs, num_classes)
 
