@@ -8,6 +8,7 @@ import time, os, sys
 import os.path as osp
 import numpy as np
 import cv2
+import scipy.io as sio
 
 import torch
 import torch.nn as nn
@@ -34,22 +35,30 @@ if __name__ == '__main__':
 
     im_scale = 1.0
 
-    extents, poses, meta_data = get_meta_info(num_classes)
-    K = meta_data[0,:9]
-    factor_depth = 10000
-    # K[2,2] = 1
+    extents, poses, _ = get_meta_info(num_classes)
+    # K = meta_data[0,:9]
+    # K = np.reshape(K, (3,3))
+    # factor_depth = 10000
+    # # K[2,2] = 1
 
     # construct the filenames
     # demo_dir = 'data/demo_images/'
-    demo_dir = 'data/LOV/data/0000/'
+    demo_dir = 'data/LOV/data/0001/'
+
     rgb_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("color.png")])
     depth_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("depth.png")])
     print(rgb_filenames)
     print(depth_filenames)
 
+    meta_file = demo_dir + '000001-meta.mat'
+    meta_data = sio.loadmat(meta_file)
+    K = meta_data['intrinsic_matrix']
+    factor_depth = float(meta_data['factor_depth'])
+
     # load network
     # model_file = "posecnn.pth"
-    model_file = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_40.pth"
+    # model_file = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_100.pth"
+    model_file = "output/lov/lov_debug/vgg16_lov_iter_200.pth"
     model = PoseCNN(64, num_classes)
     model.load_state_dict(torch.load(model_file))
     print("Loaded model %s"%model_file)
@@ -72,7 +81,7 @@ if __name__ == '__main__':
         im_blob, _, _ = _get_image_blob(im, im_scale, PIXEL_MEANS)
 
         im_blob = FCT(np.transpose(im_blob, [0,3,1,2]))
-        _, labels_2d, vertex_pred, hough_outputs, poses_pred = model.forward(im_blob, FCT(extents), FCT(poses), FCT(meta_data))
+        _, labels_2d, vertex_pred, hough_outputs, poses_pred = model.forward(im_blob, FCT(extents), FCT(poses), FCT(K))
         rois, poses_init = hough_outputs[:2]
 
         labels_2d = labels_2d.data.cpu().numpy()
@@ -140,6 +149,6 @@ if __name__ == '__main__':
 
             vp = np.transpose(vertex_pred[0], [1,2,0])
             vertmap = extract_vertmap(labels, vp, num_classes)
-            K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
+            # K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
             vis_segmentations_vertmaps_detection(im, im_depth, im_label, imdb._class_colors, vertmap, 
                 labels, rois, poses, K, imdb.num_classes, imdb._classes, imdb._points_all)

@@ -6,13 +6,18 @@ from transforms3d.quaternions import quat2mat, mat2quat
 
 global cnt
 cnt = 0
-def visualize(im, depth, centers):
+def visualize(im, depth, label, centers):
     global cnt
     cnt += 1
+    h,w = label.shape
+    label_m = np.zeros((h,w,3), dtype=np.uint8)
+    for cls in np.unique(label):
+        label_m[label==cls] = np.random.randint(0,255,size=3)
     for c in centers:
         cv2.circle(im, tuple(c.astype(np.int32)), 3, (0,255,0), -1)
     cv2.imshow('im%d'%(cnt), im)
     cv2.imshow('depth', depth)
+    cv2.imshow('label', label_m)
 
 def visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix):
     im_copy = im.copy()
@@ -63,43 +68,73 @@ if __name__ == '__main__':
                          '051_large_clamp', '052_extra_large_clamp', '061_foam_brick')
     
     root_dir = "./data/LOV/" 
-    data_dir = root_dir + "data/0000/"
     points = [[]] # dummy list for background class
     for cls in _classes[1:]:
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
-    
-    file_name = "000001"
-    im_file = data_dir + "%s-color.png"%(file_name)
-    depth_file = data_dir + "%s-depth.png"%(file_name)
-    meta_file = data_dir + "%s-meta.mat"%(file_name)
+        
+    file_names = ["0000/000001", "0001/000001", "0002/000001"]
 
-    meta = sio.loadmat(meta_file)
-    intrinsic_matrix = meta['intrinsic_matrix']
-    center = np.array(meta['center'])
+    data_dir = root_dir + "data_orig/"
+    data_dir2 = root_dir + "data/"
+    for f in file_names:
+        base_f = data_dir + f
+        im_file = base_f + "-color.png"
+        depth_file = base_f + "-depth.png"
+        label_file = base_f + "-label.png"
+        meta_file = base_f + "-meta.mat"
 
-    im = cv2.imread(im_file)
-    depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
-    h,w,_ = im.shape
-    
-    cls_indexes = meta['cls_indexes'].squeeze()
-    poses = meta['poses']
-    poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
+        meta = sio.loadmat(meta_file)
+        intrinsic_matrix = meta['intrinsic_matrix']
+        center = meta['center']
 
-    visualize(im, depth, center)
-    visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
-    cv2.waitKey(0)
+        im = cv2.imread(im_file)
+        depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
+        label = cv2.imread(label_file, cv2.IMREAD_UNCHANGED)
+        h,w,_ = im.shape
 
-    flipped = 1
-    if flipped:
-        im = im[:,::-1,:]
-        depth = depth[:,::-1]
-        center[:,0] = w - center[:,0] + 1  # horizontal flip only
-        im = im.astype(np.uint8).copy()
+        # RESIZE
+        im = cv2.resize(im, (w/2,h/2))
+        depth = cv2.resize(depth, (w/2,h/2))
+        label = cv2.resize(label, (w/2,h/2))
+        vertmap = meta['vertmap']
+        vertmap = cv2.resize(vertmap, (w/2,h/2))
+        intrinsic_matrix[0,0] /= 2
+        intrinsic_matrix[0,2] /= 2
+        intrinsic_matrix[1,1] /= 2
+        intrinsic_matrix[1,2] /= 2
+        center /= 2
+        meta['intrinsic_matrix'] = intrinsic_matrix
+        meta['center'] = center
+        meta['vertmap'] = vertmap
+        new_im_file = im_file.replace(data_dir, data_dir2)
+        new_depth_file = depth_file.replace(data_dir, data_dir2)
+        new_label_file = label_file.replace(data_dir, data_dir2)
+        new_meta_file = meta_file.replace(data_dir, data_dir2)
+        cv2.imwrite(new_im_file, im)
+        cv2.imwrite(new_depth_file, depth)
+        cv2.imwrite(new_label_file, label)
+        sio.savemat(new_meta_file, meta)
+        print("Saved to %s, %s, %s, %s"%(new_im_file, new_depth_file, new_label_file, new_meta_file))
+        
+        cls_indexes = meta['cls_indexes'].squeeze()
+        poses = meta['poses']
+        poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
 
-        for ix in xrange(len(poses)):
-            poses[ix] = mirror_pose_along_y_axis(poses[ix])
-
-        visualize(im, depth, center)
+        visualize(im, depth, label, center)
         visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
         cv2.waitKey(0)
+
+        # flipped = 1
+        # if flipped:
+        #     im = im[:,::-1,:]
+        #     depth = depth[:,::-1]
+        #     center[:,0] = w - center[:,0] + 1  # horizontal flip only
+        #     im = im.astype(np.uint8).copy()
+
+        #     for ix in xrange(len(poses)):
+        #         poses[ix] = mirror_pose_along_y_axis(poses[ix])
+
+        #     visualize(im, depth, center)
+        #     visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
+        #     cv2.waitKey(0)

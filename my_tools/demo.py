@@ -10,6 +10,7 @@ import tensorflow as tf
 import os.path as osp
 import numpy as np
 import cv2
+import scipy.io as sio
 
 # mgc = get_ipython().magic
 # mgc('%matplotlib WXAgg')
@@ -39,7 +40,8 @@ def get_lov2d_args():
     args = Args()
     args.gpu_id = 0
     args.weights = None # "data/imagenet_models/vgg16.npy"
-    args.model = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
+    # args.model = "data/demo_models/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_160000.ckpt"
+    args.model = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_200.ckpt"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
     args.wait = True
     args.imdb_name = "lov_keyframe"
@@ -103,17 +105,21 @@ if __name__ == '__main__':
     imdb = get_imdb(args.imdb_name)
 
     # construct the filenames
-    demo_dir = 'data/demo_images/'
+    # demo_dir = 'data/demo_images/'
+    demo_dir = 'data/LOV/data/0002/'
+    meta_file = demo_dir + '000001-meta.mat'
     rgb_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("color.png")])
     depth_filenames = sorted([demo_dir + f for f in os.listdir(demo_dir) if f.endswith("depth.png")])
     print(rgb_filenames)
     print(depth_filenames)
 
     # construct meta data
-    K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
-    factor_depth = 10000.0
-    meta_data = dict({'intrinsic_matrix': K, 'factor_depth': factor_depth})
-    print (meta_data)
+    # K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
+    # factor_depth = 10000.0
+    # meta_data = dict({'intrinsic_matrix': K, 'factor_depth': factor_depth})
+    # print (meta_data)
+    meta_data = sio.loadmat(meta_file)
+    factor_depth = float(meta_data['factor_depth'])
 
     # from networks.factory import get_network
     # network = get_network(args.network_name)
@@ -156,7 +162,7 @@ if __name__ == '__main__':
         mdata[0] = -1 * mdata[0]
         mdata[9] = -1 * mdata[9]
         mdata[11] = -1 * mdata[11]
-    print(meta_data)
+    # print(meta_data)
 
     meta_data_blob = np.zeros((1, 1, 1, 48), dtype=np.float32)
     meta_data_blob[0,0,0,:] = mdata
@@ -223,7 +229,7 @@ if __name__ == '__main__':
 
         pose_data = [{"name": roi_classes[ix], "pose": p.tolist()} for ix, p in enumerate(poses)]
 
-        SAVE = False
+        SAVE = True
 
         im_file_prefix = im_file.replace("color.png","")
         np.save(im_file_prefix + "label2d.npy", labels_2d)
