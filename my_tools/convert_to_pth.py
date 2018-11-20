@@ -14,7 +14,8 @@ sys.path.append("my_tools")
 sys.path.append("lib/model")
 from roi_pooling.modules.roi_pool import _RoIPooling
 from hough_voting.modules.hough_voting import HoughVoting
-
+from vgg16 import VGG16
+from resnet import ResNet50
 
 def _get_conv_transpose2d(in_cn, out_cn, kernel_size, stride=(1,1), padding=0, trainable=False):
     x = nn.ConvTranspose2d(in_cn, out_cn, kernel_size=kernel_size, stride=stride, padding=padding)
@@ -24,87 +25,27 @@ def _get_conv_transpose2d(in_cn, out_cn, kernel_size, stride=(1,1), padding=0, t
     #         p.requires_grad = False
     return x
 
+def _get_conv_transpose2d_by_factor(in_cn, out_cn, factor, trainable=False):
+    """
+    Maintain output_size = input_size * factor (multiple of 2)
+    """
+    # stride = int(1.0/spatial_scale)
+    assert factor >= 2 and factor % 2 == 0
+    stride = factor
+    k = stride * 2
+    kernel_size = (k,k)
+    padding = stride / 2
+    stride = (stride, stride)
+    return _get_conv_transpose2d(in_cn, out_cn, kernel_size, stride, padding, trainable=trainable)
+
 def _get_fc_layer(in_cn, out_cn):
     x = nn.Linear(in_cn, out_cn)
     x.bias.data.zero_()
     nn.init.normal_(x.weight, 0.0, 0.001)
     return x
 
-class VGG16(nn.Module):
-    def __init__(self):
-        super(VGG16, self).__init__()
-
-        self.max_pool2d = nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
-
-        self.conv_dim_out = [64,128,256,512,512]
-        c_dims = self.conv_dim_out
-
-        inplace = True
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(64, c_dims[0], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(c_dims[0], 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(128, c_dims[1], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-        )
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(c_dims[1], 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(256, c_dims[2], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-        )
-        self.conv4 = nn.Sequential(
-            nn.Conv2d(c_dims[2], 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(512, c_dims[3], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-        )
-        self.conv5 = nn.Sequential(
-            nn.Conv2d(c_dims[3], 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-            nn.Conv2d(512, c_dims[4], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
-            nn.ReLU(inplace),
-        )
-
-    def forward(self, x):
-        conv1 = self.conv1(x)
-        conv2 = self.conv2(self.max_pool2d(conv1))
-        conv3 = self.conv3(self.max_pool2d(conv2))
-        conv4 = self.conv4(self.max_pool2d(conv3))
-        conv5 = self.conv5(self.max_pool2d(conv4))
-        return conv4, conv5
-
-    def load_pretrained(self, model_file):
-        m = torch.load(model_file)
-        mk = m.keys()[:26]
-        sd = self.state_dict()
-        sdk = sd.keys()
-
-        print("Loading pretrained model %s..."%(model_file))
-        for ix,k in enumerate(mk):
-            md = m[k]
-            sk = sdk[ix]
-            d = sd[sk]
-            assert d.shape == md.shape
-            print("%s -> %s [%s]"%(k, sk, str(d.shape)))
-            sd[sk] = md
-        self.load_state_dict(sd)
-        print("Loaded pretrained model %s"%(model_file))
-
 class SemanticMaskHead(nn.Module):
-    def __init__(self, conv0_dim_in, conv1_dim_in, dim_out, num_units=64):
+    def __init__(self, conv0_dim_in, conv1_dim_in, conv0_spatial_scale, conv1_spatial_scale, dim_out, num_units=64):
         super(SemanticMaskHead, self).__init__()
 
         inplace = True
@@ -117,8 +58,8 @@ class SemanticMaskHead(nn.Module):
             nn.Conv2d(conv1_dim_in, num_units, kernel_size=(1, 1), stride=(1, 1)),
             nn.ReLU(inplace)
         )
-        self.upscore_conv5 = _get_conv_transpose2d(num_units, num_units, kernel_size=(4,4), stride=(2,2), padding=(1,1), trainable=False)
-        self.upscore = _get_conv_transpose2d(num_units, num_units, kernel_size=(16,16), stride=(8,8), padding=(4,4), trainable=False)
+        self.upscore_conv5 = _get_conv_transpose2d_by_factor(num_units, num_units, factor=int(conv0_spatial_scale/conv1_spatial_scale), trainable=False)
+        self.upscore = _get_conv_transpose2d_by_factor(num_units, num_units, factor=int(1.0/conv0_spatial_scale), trainable=False)
         self.score = nn.Sequential(
             nn.Conv2d(num_units, dim_out, kernel_size=(1, 1), stride=(1, 1)),
             nn.ReLU(inplace)
@@ -138,7 +79,7 @@ class SemanticMaskHead(nn.Module):
         return score, label2d
 
 class VertexRegHead(nn.Module):
-    def __init__(self, conv0_dim_in, conv1_dim_in, dim_out, num_units=128):
+    def __init__(self, conv0_dim_in, conv1_dim_in, conv0_spatial_scale, conv1_spatial_scale, dim_out, num_units=128):
         super(VertexRegHead, self).__init__()
 
         inplace = True
@@ -147,8 +88,8 @@ class VertexRegHead(nn.Module):
 
         self.score_conv4_vertex = nn.Conv2d(conv0_dim_in, num_units, kernel_size=(1, 1), stride=(1, 1))
         self.score_conv5_vertex = nn.Conv2d(conv1_dim_in, num_units, kernel_size=(1, 1), stride=(1, 1))
-        self.upscore_conv5_vertex = _get_conv_transpose2d(num_units, num_units, kernel_size=(4,4), stride=(2,2), padding=(1,1), trainable=False)
-        self.upscore_vertex = _get_conv_transpose2d(num_units, num_units, kernel_size=(16,16), stride=(8,8), padding=(4,4), trainable=False)
+        self.upscore_conv5_vertex = _get_conv_transpose2d_by_factor(num_units, num_units, factor=int(conv0_spatial_scale/conv1_spatial_scale), trainable=False)
+        self.upscore_vertex = _get_conv_transpose2d_by_factor(num_units, num_units, factor=int(1.0/conv0_spatial_scale), trainable=False)
         self.vertex_pred = nn.Conv2d(num_units, self.dim_out, kernel_size=(1, 1), stride=(1, 1))
 
     def forward(self, conv0, conv1):
@@ -161,12 +102,34 @@ class VertexRegHead(nn.Module):
         return vertex_pred
 
 class RoiPoolLayer(nn.Module):
-    def __init__(self, roi_pool_dims=(7,7)):
+    def __init__(self, conv0_spatial_scale, conv1_spatial_scale, roi_pool_dims=(7,7)):
         super(RoiPoolLayer, self).__init__()    
         if isinstance(roi_pool_dims, int):
             roi_pool_dims = (roi_pool_dims, roi_pool_dims)
         self.roi_pool_dims = roi_pool_dims
-        
+    
+        h, w = self.roi_pool_dims
+        self.roi_pool1 = _RoIPooling(h,w,conv0_spatial_scale) 
+        self.roi_pool2 = _RoIPooling(h,w,conv1_spatial_scale) 
+
+    def forward(self, conv0, conv1, rois_raw):
+        if rois_raw.shape[0] == 0:
+            rois = rois_raw.new(1,5).zero_() #.new(0,5)
+        else:
+            n, rs = rois_raw.shape
+            if rs == 5:
+                rois = rois_raw
+            elif rs == 7:      # rois_raw from hough_voting: batch_index, cls, x1, y1, x2, y2, max_hough_idx
+                rois = rois_raw.new(n,5)
+                rois[:,0] = rois_raw[:,0]
+                rois[:,1:] = rois_raw[:,2:-1]
+            else:
+                raise NotImplementedError("ROI dimension must be of shape (N,5) or (N,7), but received shape: (%d,%d)"%(n, rs))
+
+        rp1 = self.roi_pool1(conv0, rois)  # B,C,H,W  (B,512,7,7)
+        rp2 = self.roi_pool2(conv1, rois)  # B,C,H,W  (B,512,7,7)
+        rp = torch.add(rp1, rp2)
+        return rp
 
 class PoseRegHead(nn.Module):
     def __init__(self, dim_in, dim_out, num_units=4096):
@@ -237,19 +200,22 @@ class PoseCNN(nn.Module):
         drop_prob = 1.0 - keep_prob if is_train else 0.0
         self.drop_prob = drop_prob
 
-        self.features = VGG16()
+        # self.features = VGG16()
+        self.features = ResNet50()
         dim_outs = self.features.conv_dim_out
         dim_out_0, dim_out_1 = dim_outs[-2:]
+        spatial_scales = self.features.conv_spatial_scale
+        spatial_scale_0, spatial_scale_1 = spatial_scales[-2:]
 
         """
         SEMANTIC MASK LAYER
         """
-        self.mask_head = SemanticMaskHead(dim_out_0, dim_out_1, num_classes, num_units)
+        self.mask_head = SemanticMaskHead(dim_out_0, dim_out_1, spatial_scale_0, spatial_scale_1, num_classes, num_units)
 
         """
         VERTEX REG LAYER
         """
-        self.vertex_head = VertexRegHead(dim_out_0, dim_out_1, num_classes, num_units*2)
+        self.vertex_head = VertexRegHead(dim_out_0, dim_out_1, spatial_scale_0, spatial_scale_1, num_classes, num_units*2)
 
         """
         HOUGH VOTE LAYER
@@ -260,50 +226,21 @@ class PoseCNN(nn.Module):
         """
         ROI POOL LAYER
         """
+        self.conv_filter_0 = lambda x: x
+        self.conv_filter_1 = lambda x: x
+        max_num_units = 512
+        if dim_out_0 != max_num_units:
+            self.conv_filter_0 = nn.Conv2d(dim_out_0, max_num_units, kernel_size=(1, 1), stride=(1, 1))
+        if dim_out_1 != max_num_units:
+            self.conv_filter_1 = nn.Conv2d(dim_out_1, max_num_units, kernel_size=(1, 1), stride=(1, 1))
         self.roi_pool_dims = (7,7)
-        h, w = self.roi_pool_dims
-        self.roi_pool1 = _RoIPooling(h,w,1.0/16)  # from conv5_3
-        self.roi_pool2 = _RoIPooling(h,w,1.0/8)  # from conv4_3
+        self.roi_pool = RoiPoolLayer(spatial_scale_0,spatial_scale_1,self.roi_pool_dims)
 
         """
         POSE REG LAYER
         """
-        assert dim_out_0 == dim_out_1
-        self.pose_head = PoseRegHead(h*w*dim_out_0, num_classes, 4096)
-
-        # self.poses_fc = nn.Sequential(
-        #     # nn.Linear(h*w*512,4096),
-        #     self._get_fc_layer(h*w*512,4096),
-        #     nn.ReLU(inplace),
-        #     nn.Dropout(p=drop_prob),
-        #     # nn.Linear(4096,4096),
-        #     self._get_fc_layer(4096,4096),
-        #     nn.ReLU(inplace),
-        #     nn.Dropout(p=drop_prob),
-        #     # self.dropout,
-        #     nn.Linear(4096,4 * self.num_classes)
-        # )
-
-
-    def pose_reg_layer(self, conv4, conv5, rois_raw):
-        # rois_raw from hough_voting: batch_index, cls, x1, y1, x2, y2, max_hough_idx
         h, w = self.roi_pool_dims
-        if rois_raw.shape[0] == 0:
-            rois = rois_raw.new(1,5).zero_() #.new(0,5)
-        else:
-            n, rs = rois_raw.shape
-            assert rs == 7
-            rois = rois_raw.new(n,5)
-            rois[:,0] = rois_raw[:,0]
-            rois[:,1:] = rois_raw[:,2:-1]
-
-        rp1 = self.roi_pool1(conv5, rois)  # B,C,H,W  (B,512,7,7)
-        rp2 = self.roi_pool2(conv4, rois)  # B,C,H,W  (B,512,7,7)
-        rp = torch.add(rp1, rp2)
-        # print(rp.shape)
-        out = self.pose_head(rp, self.drop_prob, self.is_train)
-
-        return out
+        self.pose_head = PoseRegHead(h*w*max_num_units, num_classes, 4096)
 
     def forward_image(self, x):
         c4, c5 = self.features(x)
@@ -318,7 +255,8 @@ class PoseCNN(nn.Module):
         vertex_pred = self.vertex_head(c4, c5)
         hough_outputs = self.hough_voting(label_2d, vertex_pred, extents, poses, mdata)
         rois = hough_outputs[0]
-        pose_reg = self.pose_reg_layer(c4, c5, rois)
+        rois_out = self.roi_pool(self.conv_filter_0(c4), self.conv_filter_1(c5), rois)
+        pose_reg = self.pose_head(rois_out, self.drop_prob, self.is_train)
         # out = out.view(out.size(0), -1)
         # out = self.fc(out)
         return score, label_2d, vertex_pred, hough_outputs, pose_reg

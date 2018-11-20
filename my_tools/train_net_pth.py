@@ -20,6 +20,10 @@ from datasets.factory import get_imdb
 from gt_posecnn_layer.layer import GtPoseCNNLayer
 
 # from fcn.train import SolverWrapper
+import cv2
+# OpenCL may be enabled by default in OpenCV3; disable it because it's not
+# thread safe and causes unwanted GPU memory allocations.
+cv2.ocl.setUseOpenCL(False)
 
 
 def load_cfg(args):
@@ -41,6 +45,8 @@ def load_cfg(args):
     cfg.TRAIN.SNAPSHOT_ITERS = 500
     cfg.TRAIN.USE_FLIPPED = True
     cfg.TRAIN.IMS_PER_BATCH = 1
+    # cfg.TRAIN.SNAPSHOT_PREFIX = "vgg16"
+    cfg.TRAIN.SNAPSHOT_PREFIX = "resnet50"
 
 def get_lov2d_args():
     class Args():
@@ -49,9 +55,10 @@ def get_lov2d_args():
     args = Args()
     args.gpu_id = 0
     args.max_iters = 100
-    args.pretrained_model = "/data/models/vgg16.pth"
+    # args.pretrained_model = "/data/models/vgg16.pth"
+    args.pretrained_model = "/data/models/resnet50.pth"
     args.pretrained_ckpt = None#"posecnn.pth"
-    # args.pretrained_ckpt = "output/lov/lov_debug/vgg16_fcn_color_single_frame_2d_pose_add_lov_iter_100.pth"
+    # args.pretrained_ckpt = "output/lov/lov_debug/resnet50_lov_iter_100.pth"
     args.cfg_file = "experiments/cfgs/lov_color_2d.yml"
     args.imdb_name = "lov_debug"
     args.randomize = False
@@ -186,7 +193,7 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     num_classes = imdb.num_classes
     # LOAD DATA LAYER
     data_layer = GtPoseCNNLayer(roidb, num_classes, imdb._extents, imdb._points_all, imdb._symmetry)
-    q = Queue(maxsize=10)
+    q = Queue(maxsize=5)
     sleep_time_seconds = None
     num_data_workers = 2
     for i in xrange(num_data_workers):
@@ -202,6 +209,7 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     elif pretrained_model is not None:
         print ('Loading pretrained model weights from %s'%(pretrained_model))
         network.load_pretrained(pretrained_model)
+    torch.cuda.empty_cache()
 
     network.cuda()
     network.train()
@@ -280,3 +288,4 @@ if __name__ == '__main__':
                   pretrained_model=args.pretrained_model,
                   pretrained_ckpt=args.pretrained_ckpt,
                   max_iters=args.max_iters)
+
