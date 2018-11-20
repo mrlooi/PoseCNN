@@ -135,8 +135,6 @@ class PoseRegHead(nn.Module):
     def __init__(self, dim_in, dim_out, num_units=4096):
         super(PoseRegHead, self).__init__()
 
-        inplace = True
-
         self.dim_in = dim_in
         self.dim_out = dim_out * 4
         self.num_units = num_units
@@ -150,10 +148,10 @@ class PoseRegHead(nn.Module):
 
         fc1 = self.poses_fc1(x_flat)
         fc1 = F.normalize(fc1, p=2, dim=1)
-        fc1 = F.dropout(F.relu(fc1), drop_prob, training=is_train)
+        fc1 = F.dropout(F.relu(fc1, inplace=True), drop_prob, training=is_train)
         fc2 = self.poses_fc2(fc1)
         fc2 = F.normalize(fc2, p=2, dim=1)
-        fc2 = F.dropout(F.relu(fc2), drop_prob, training=is_train)
+        fc2 = F.dropout(F.relu(fc2, inplace=True), drop_prob, training=is_train)
         fc3 = self.poses_fc3(fc2)
         fc3 = F.normalize(fc3, p=2, dim=1)
 
@@ -240,14 +238,14 @@ class PoseCNN(nn.Module):
         POSE REG LAYER
         """
         h, w = self.roi_pool_dims
-        self.pose_head = PoseRegHead(h*w*max_num_units, num_classes, 4096)
+        self.pose_head = PoseRegHead(h*w*max_num_units, num_classes, 1024)
 
     def forward_image(self, x):
         c4, c5 = self.features(x)
-        _, label_2d = self.mask_head(c4, c5)
+        score, label_2d = self.mask_head(c4, c5)
         vertex_pred = self.vertex_head(c4, c5)
 
-        return label_2d, vertex_pred
+        return score, label_2d, vertex_pred
 
     def forward(self, x, extents, poses, mdata):
         c4, c5 = self.features(x)

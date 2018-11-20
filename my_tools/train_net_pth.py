@@ -39,11 +39,9 @@ def load_cfg(args):
     cfg.POSE = args.pose_name
     cfg.IS_TRAIN = True
 
-    cfg.USE_FLIPPED = False
-
-    cfg.TRAIN.LEARNING_RATE = 0.0003
+    cfg.TRAIN.LEARNING_RATE = 0.0005
     cfg.TRAIN.SNAPSHOT_ITERS = 500
-    cfg.TRAIN.USE_FLIPPED = True
+    cfg.TRAIN.USE_FLIPPED = False
     cfg.TRAIN.IMS_PER_BATCH = 1
     # cfg.TRAIN.SNAPSHOT_PREFIX = "vgg16"
     cfg.TRAIN.SNAPSHOT_PREFIX = "resnet50"
@@ -54,7 +52,7 @@ def get_lov2d_args():
 
     args = Args()
     args.gpu_id = 0
-    args.max_iters = 100
+    args.max_iters = 200
     # args.pretrained_model = "/data/models/vgg16.pth"
     args.pretrained_model = "/data/models/resnet50.pth"
     args.pretrained_ckpt = None#"posecnn.pth"
@@ -152,7 +150,7 @@ def fetch_data(q, data_layer, sleep_time=None):
         if sleep_time is not None and sleep_time != 0:
             time.sleep(sleep_time)
 
-def get_losses(network, blobs, num_classes):
+def get_losses(network, blobs, num_classes, include_pose_loss=False):
     blob_im = blobs['data_image_color']
     vertex_weights = blobs['data_vertex_weights']
     vertex_targets = blobs['data_vertex_targets']
@@ -164,9 +162,18 @@ def get_losses(network, blobs, num_classes):
     blob_meta_data = blobs['data_meta_data']
     blob_sym = blobs['data_symmetry']
     
-    scores, label_2d, vertex_pred, hough_outputs, poses_tanh = network.forward(blob_im, blob_extents, blob_poses, blob_meta_data)
-    poses_target, poses_weight = hough_outputs[2:4]
 
+    # pose loss
+    if include_pose_loss:
+        scores, label_2d, vertex_pred, hough_outputs, poses_tanh = network.forward(blob_im, blob_extents, blob_poses, blob_meta_data)
+        poses_target, poses_weight = hough_outputs[2:4]
+        poses_mul = torch.mul(poses_tanh, poses_weight)
+        poses_pred = F.normalize(poses_mul, p=2, dim=1)
+        loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
+    else:
+        scores, label_2d, vertex_pred = network.forward_image(blob_im)
+        loss_pose = FCT(0)
+        
     # cls loss
     prob = F.log_softmax(scores, 1).permute((0,2,3,1)).clone() # permute for hard_label_func, which is in BHWC format
     prob_n = F.softmax(scores, 1).permute((0,2,3,1)).clone() # permute for hard_label_func, which is in BHWC format
@@ -176,14 +183,9 @@ def get_losses(network, blobs, num_classes):
     # vertex loss
     loss_vertex = cfg.TRAIN.VERTEX_W * smooth_l1_loss_vertex(vertex_pred, vertex_targets, vertex_weights)
 
-    # pose loss
-    poses_mul = torch.mul(poses_tanh, poses_weight)
-    poses_pred = F.normalize(poses_mul, p=2, dim=1)
-    loss_pose = cfg.TRAIN.POSE_W * average_distance_loss_func(poses_pred, poses_target, poses_weight, blob_points, blob_sym, num_classes, margin=0.01)
-    # loss_pose = FCT(0)
+    loss = loss_cls + loss_vertex + loss_pose
 
-    loss_regu = 0 # TODO: tf.add_n(tf.losses.get_regularization_losses(), 'regu')
-    loss = loss_cls + loss_vertex + loss_pose + loss_regu
+    # loss_regu = 0 # TODO: tf.add_n(tf.losses.get_regularization_losses(), 'regu')
 
     return loss, loss_cls, loss_vertex, loss_pose
 
@@ -193,9 +195,9 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     num_classes = imdb.num_classes
     # LOAD DATA LAYER
     data_layer = GtPoseCNNLayer(roidb, num_classes, imdb._extents, imdb._points_all, imdb._symmetry)
-    q = Queue(maxsize=5)
+    q = Queue(maxsize=10)
     sleep_time_seconds = None
-    num_data_workers = 2
+    num_data_workers = 3
     for i in xrange(num_data_workers):
         worker = Thread(target=fetch_data, args=(q,data_layer,sleep_time_seconds,))
         worker.setDaemon(True)
@@ -231,6 +233,8 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
     print('Training...')
     last_snapshot_iter = 0
     iter = 0
+
+    loss_cls = loss_vertex = 1e5
     while iter < max_iters:
         if q.empty():
             sleep_s = 0.5
@@ -241,7 +245,8 @@ def train_net(network, imdb, roidb, output_dir, pretrained_model=None, pretraine
         blobs = q.get()
         q.task_done()
 
-        loss, loss_cls, loss_vertex, loss_pose = get_losses(network, blobs, num_classes)
+        include_pose_loss = loss_cls < 0.4 and loss_vertex < 0.2 
+        loss, loss_cls, loss_vertex, loss_pose = get_losses(network, blobs, num_classes, include_pose_loss=include_pose_loss)
 
         optimizer.zero_grad()
         loss.backward()
