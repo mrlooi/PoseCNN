@@ -113,6 +113,10 @@ if __name__ == '__main__':
     print(rgb_filenames)
     print(depth_filenames)
 
+    if len(rgb_filenames) == 0:
+        print("Could not find files in %s, exiting"%(demo_dir))
+        sys.exit(0)
+
     # construct meta data
     # K = np.array([[1066.778, 0, 312.9869], [0, 1067.487, 241.3109], [0, 0, 1]])
     # factor_depth = 10000.0
@@ -172,6 +176,12 @@ if __name__ == '__main__':
         im_file = rgb_filenames[idx]
         depth_file = depth_filenames[idx]
         img = cv2.imread(im_file, cv2.IMREAD_UNCHANGED)
+
+        if img is None:
+            print("Could not read image: %s"%(im_file))
+            continue
+        print("Inferencing: %s"%(im_file))
+        
         im = pad_im(img, 16)
 
         im_blob, im_rescale_blob, im_scale_factors = _get_image_blob(im, im_scale, cfg.PIXEL_MEANS)
