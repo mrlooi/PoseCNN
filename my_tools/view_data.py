@@ -46,6 +46,86 @@ def visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix):
 
     cv2.imshow("proj_poses%d"%(cnt), im_copy)
 
+def normalize(x, xmin=None, xmax=None):
+    xmin = np.min(x) if xmin is None else xmin
+    xmax = np.max(x) if xmax is None else xmax
+    nx = x - xmin
+    nx /= (xmax - xmin)
+    return nx
+
+def visualize_vertmap(vertmap):
+    cx = normalize(vertmap[:,:,0])
+    cy = normalize(vertmap[:,:,1])
+    cz = normalize(vertmap[:,:,2])
+    cv2.imshow("vertmap x", cx)
+    cv2.imshow("vertmap y", cy)
+    cv2.imshow("vertmap z", cz)
+
+def visualize_centers(im_label, cls_indexes, center, poses):
+    width = im_label.shape[1]
+    height = im_label.shape[0]
+    cls_i = cls_indexes.squeeze()
+
+    # vertex_targets = np.zeros((len(cls_i), height, width, 3), dtype=np.float32)
+    vertex_targets = np.zeros((height, width, 3), dtype=np.float32)
+    # vertex_weights = np.zeros(vertex_targets.shape, dtype=np.float32)
+
+    c = np.zeros((2, 1), dtype=np.float32)
+    for ind, cls in enumerate(cls_i):
+        c[0] = center[ind, 0]
+        c[1] = center[ind, 1]
+        z = poses[ind][2, 3]
+
+        y, x = np.where(im_label == cls)
+
+        R = c - np.vstack((x, y))
+        # compute the norm
+        N = np.linalg.norm(R, axis=0) + 1e-10
+        # normalization
+        R = R / N # np.divide(R, np.tile(N, (2,1)))
+        # assignment
+        vertex_targets[y, x, 0] = R[0,:]
+        vertex_targets[y, x, 1] = R[1,:]
+        vertex_targets[y, x, 2] = z
+
+        # vertex_targets[ind, y, x, 0] = R[0,:]
+        # vertex_targets[ind, y, x, 1] = R[1,:]
+        # vertex_targets[ind, y, x, 2] = z
+        # vertex_weights[ind, y, x, :] = 10.0
+
+    min_depth = 0
+    max_depth = 10
+    cx = normalize(vertex_targets[:,:,0],-1,1)
+    cy = normalize(vertex_targets[:,:,1],-1,1)
+    cz = normalize(vertex_targets[:,:,2], min_depth)#, max_depth)
+    cv2.imshow("center x", cx)
+    cv2.imshow("center y", cy)
+    cv2.imshow("center z", cz)
+    return vertex_targets#, vertex_weights
+
+# def visualize_centers(vert_centers):
+#     min_depth = 0
+#     max_depth = 10
+
+#     if len(vert_centers) == 0:
+#         return
+#     centers_mat = []
+#     for ix,vc in enumerate(vert_centers):
+#         # color = np.random.randint(0,255,size=(3))
+#         # np.where()
+#         cx = normalize(vc[:,:,0],-1,1)
+#         cy = normalize(vc[:,:,1],-1,1)
+#         cz = normalize(vc[:,:,2], min_depth, max_depth)
+#         merged = np.hstack((cx,cy,cz))
+#         if ix == 0:
+#             centers_mat = merged
+#         else:
+#             centers_mat = np.vstack((centers_mat, merged))
+#         # cv2.imshow("centers y", cy)
+#         # cv2.imshow("centers z", cz)
+#     cm_resized = cv2.resize(centers_mat, (1333, 1000))
+#     cv2.imshow("centers_mat", cm_resized)
+
 def mirror_pose_along_y_axis(pose):
     R = pose[:, :3]
     # q = mat2quat(R)
@@ -91,38 +171,42 @@ if __name__ == '__main__':
         im = cv2.imread(im_file)
         depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
         label = cv2.imread(label_file, cv2.IMREAD_UNCHANGED)
+        vertmap = meta['vertmap']
         h,w,_ = im.shape
 
-        # RESIZE
-        im = cv2.resize(im, (w/2,h/2))
-        depth = cv2.resize(depth, (w/2,h/2))
-        label = cv2.resize(label, (w/2,h/2))
-        vertmap = meta['vertmap']
-        vertmap = cv2.resize(vertmap, (w/2,h/2))
-        intrinsic_matrix[0,0] /= 2
-        intrinsic_matrix[0,2] /= 2
-        intrinsic_matrix[1,1] /= 2
-        intrinsic_matrix[1,2] /= 2
-        center /= 2
-        meta['intrinsic_matrix'] = intrinsic_matrix
-        meta['center'] = center
-        meta['vertmap'] = vertmap
-        new_im_file = im_file.replace(data_dir, data_dir2)
-        new_depth_file = depth_file.replace(data_dir, data_dir2)
-        new_label_file = label_file.replace(data_dir, data_dir2)
-        new_meta_file = meta_file.replace(data_dir, data_dir2)
-        cv2.imwrite(new_im_file, im)
-        cv2.imwrite(new_depth_file, depth)
-        cv2.imwrite(new_label_file, label)
-        sio.savemat(new_meta_file, meta)
-        print("Saved to %s, %s, %s, %s"%(new_im_file, new_depth_file, new_label_file, new_meta_file))
+        # # RESIZE
+        # im = cv2.resize(im, (w/2,h/2))
+        # depth = cv2.resize(depth, (w/2,h/2))
+        # label = cv2.resize(label, (w/2,h/2))
+        # vertmap = cv2.resize(vertmap, (w/2,h/2))
+        # intrinsic_matrix[0,0] /= 2
+        # intrinsic_matrix[0,2] /= 2
+        # intrinsic_matrix[1,1] /= 2
+        # intrinsic_matrix[1,2] /= 2
+        # center /= 2
+        # meta['intrinsic_matrix'] = intrinsic_matrix
+        # meta['center'] = center
+        # meta['vertmap'] = vertmap
+        # new_im_file = im_file.replace(data_dir, data_dir2)
+        # new_depth_file = depth_file.replace(data_dir, data_dir2)
+        # new_label_file = label_file.replace(data_dir, data_dir2)
+        # new_meta_file = meta_file.replace(data_dir, data_dir2)
+        # cv2.imwrite(new_im_file, im)
+        # cv2.imwrite(new_depth_file, depth)
+        # cv2.imwrite(new_label_file, label)
+        # sio.savemat(new_meta_file, meta)
+        # print("Saved to %s, %s, %s, %s"%(new_im_file, new_depth_file, new_label_file, new_meta_file))
         
         cls_indexes = meta['cls_indexes'].squeeze()
         poses = meta['poses']
         poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
 
+
         visualize(im, depth, label, center)
         visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
+        vert_centers = visualize_centers(label, cls_indexes, center, poses)
+        # visualize_vertmap(vertmap)
+        # visualize_centers(vert_centers)
         cv2.waitKey(0)
 
         # flipped = 1
