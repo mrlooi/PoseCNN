@@ -55,7 +55,7 @@ class CocoAnnotationClass(object):
                 }
         self.data["categories"].append(cat_data)
 
-    def add_annot(self, id, img_id, img_cls, seg_data, vertex_data=[], is_crowd=0):
+    def add_annot(self, id, img_id, img_cls, seg_data, meta_data={}, is_crowd=0):
         """ONLY SUPPORTS seg polygons of len 1 i.e. cannot support multiple polygons that refer to the same id"""
         if isinstance(img_cls, str):
             if img_cls not in self.map_classes_idx:
@@ -79,7 +79,7 @@ class CocoAnnotationClass(object):
                     "area" : area,
                     "bbox" : bbox,
                     "iscrowd" : is_crowd,
-                    "vertex": vertex_data # CUSTOM
+                    "meta": meta_data # CUSTOM
                 }
         self.data["annotations"].append(annot_data)
 
@@ -176,13 +176,13 @@ if __name__ == '__main__':
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
         
-    file_names = ["0000/000001"]#, "0001/000001", "0002/000001"]
+    file_names = ["0000/000001", "0001/000001", "0002/000001"]
 
     data_dir = root_dir + "data/"
     
     total_cnt = 0
 
-    for ix,f in enumerate(file_names):
+    for fx,f in enumerate(file_names):
         base_f = data_dir + f
         im_file = base_f + "-color.png"
         # depth_file = base_f + "-depth.png"
@@ -198,15 +198,15 @@ if __name__ == '__main__':
         # load meta data
         meta = sio.loadmat(meta_file)
         intrinsic_matrix = meta['intrinsic_matrix']
-        center = meta['center']
         cls_indexes = meta['cls_indexes'].squeeze().astype(np.int32)
-        poses = meta['poses']
+        center = np.round(meta['center']).astype(np.int32)
+        poses = meta['poses'].astype(np.float32)
         poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
 
-        IMG_ID = ix + 1
+        IMG_ID = fx + 1
 
         cnt = 0 
-        for cls in cls_indexes:
+        for cx,cls in enumerate(cls_indexes):
 
             # convert labels to polygons
             cls = int(cls)
@@ -216,10 +216,12 @@ if __name__ == '__main__':
             if len(polygons) == 0:
                 continue
 
+            meta_data = {'center': center[cx].tolist(), 'pose': poses[cx].flatten().tolist()}
+
             cnt += 1
             total_cnt += 1
 
-            coco_annot.add_annot(total_cnt, IMG_ID, cls, polygons[0])
+            coco_annot.add_annot(total_cnt, IMG_ID, cls, polygons[0], meta_data)
 
             # approx = polygons[0]
             # total = len(approx)
@@ -238,7 +240,7 @@ if __name__ == '__main__':
         img_name = im_file.replace(data_dir, "")
         coco_annot.add_image(IMG_ID, img_width, img_height, img_name)
 
-    # with open(coco_out_file, "w") as f:
-    #     json.dump(coco_annot.get_annot_json(), f)
-    #     print("Saved to %s"%(coco_out_file))
+    with open(coco_out_file, "w") as f:
+        json.dump(coco_annot.get_annot_json(), f)
+        print("Saved to %s"%(coco_out_file))
 
