@@ -6,15 +6,18 @@ from transforms3d.quaternions import quat2mat, mat2quat
 
 global cnt
 cnt = 0
-def visualize(im, depth, label, centers):
+def visualize(im, depth, label, centers, cls_indexes):
     global cnt
     cnt += 1
     h,w = label.shape
     label_m = np.zeros((h,w,3), dtype=np.uint8)
-    for cls in np.unique(label):
+    for cls in cls_indexes: #np.unique(label):
         label_m[label==cls] = np.random.randint(0,255,size=3)
     for c in centers:
         cv2.circle(im, tuple(c.astype(np.int32)), 3, (0,255,0), -1)
+    bboxes = get_bboxes(label, cls_indexes)
+    for bbox in bboxes:
+        cv2.rectangle(im, tuple(bbox[:2]), tuple(bbox[2:]), (0,255,0))
     cv2.imshow('im%d'%(cnt), im)
     cv2.imshow('depth', depth)
     cv2.imshow('label', label_m)
@@ -46,6 +49,13 @@ def visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix):
 
     cv2.imshow("proj_poses%d"%(cnt), im_copy)
 
+def get_bboxes(label, cls_indexes):
+    bboxes = []
+    for cls in cls_indexes:
+        y, x = np.where(label==cls)
+        bboxes.append([np.min(x),np.min(y),np.max(x),np.max(y)])
+    return np.array(bboxes, dtype=np.int32)
+
 def normalize(x, xmin=None, xmax=None):
     xmin = np.min(x) if xmin is None else xmin
     xmax = np.max(x) if xmax is None else xmax
@@ -54,9 +64,9 @@ def normalize(x, xmin=None, xmax=None):
     return nx
 
 def visualize_vertmap(vertmap):
-    cx = normalize(vertmap[:,:,0])
-    cy = normalize(vertmap[:,:,1])
-    cz = normalize(vertmap[:,:,2])
+    cx = normalize(vertmap[:,:,0],-1,1)
+    cy = normalize(vertmap[:,:,1],-1,1)
+    cz = normalize(vertmap[:,:,2],0)
     cv2.imshow("vertmap x", cx)
     cv2.imshow("vertmap y", cy)
     cv2.imshow("vertmap z", cz)
@@ -75,6 +85,7 @@ def visualize_centers(im_label, cls_indexes, center, poses):
         c[0] = center[ind, 0]
         c[1] = center[ind, 1]
         z = poses[ind][2, 3]
+        # print(z)
 
         y, x = np.where(im_label == cls)
 
@@ -141,6 +152,21 @@ def mirror_pose_along_y_axis(pose):
     pose[0, 3] *= -1
     return pose
 
+def get_resized_and_rescaled_centers(centers, bbox, discretization_size=14):
+    N,H,W = centers.shape
+    rescaled = centers.copy()
+    res = centers[bbox[1]:bbox[3],bbox[0]:bbox[2],:]
+    cv2.imshow("res", res[:,:,0])
+    cv2.waitKey(0)
+    sz = (discretization_size, discretization_size)
+    res = cv2.resize(res, sz, interpolation=cv2.INTER_LINEAR)
+    res = cv2.resize(res, (bbox[2]-bbox[0],bbox[3]-bbox[1]), interpolation=cv2.INTER_LINEAR)
+
+    cv2.imshow("res", normalize(res[:,:,0],-1,1))
+    cv2.waitKey(0)
+    rescaled[bbox[1]:bbox[3],bbox[0]:bbox[2],:] = res
+    return rescaled
+
 if __name__ == '__main__':
     _classes = ('__background__', '002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', \
                          '007_tuna_fish_can', '008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana', '019_pitcher_base', \
@@ -172,7 +198,12 @@ if __name__ == '__main__':
         depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
         label = cv2.imread(label_file, cv2.IMREAD_UNCHANGED)
         vertmap = meta['vertmap']
+        cls_indexes = meta['cls_indexes'].squeeze()
+        bboxes = get_bboxes(label, cls_indexes)
         h,w,_ = im.shape
+
+        poses = meta['poses']
+        poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
 
         # # RESIZE
         # im = cv2.resize(im, (w/2,h/2))
@@ -197,16 +228,15 @@ if __name__ == '__main__':
         # sio.savemat(new_meta_file, meta)
         # print("Saved to %s, %s, %s, %s"%(new_im_file, new_depth_file, new_label_file, new_meta_file))
         
-        cls_indexes = meta['cls_indexes'].squeeze()
-        poses = meta['poses']
-        poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
 
-
-        visualize(im, depth, label, center)
+        visualize(im, depth, label, center, cls_indexes)
         visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
         vert_centers = visualize_centers(label, cls_indexes, center, poses)
         # visualize_vertmap(vertmap)
         # visualize_centers(vert_centers)
+
+        # visualize_vertmap(get_resized_and_rescaled_centers(vert_centers, bboxes[0], 16))
+
         cv2.waitKey(0)
 
         # flipped = 1
