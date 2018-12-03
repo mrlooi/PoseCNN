@@ -167,7 +167,7 @@ if __name__ == '__main__':
     GREEN = (0,255,0)
     BLUE = (255,0,0)
 
-    coco_out_file = "./coco_ycb_debug.json"
+    coco_out_file = "./coco_lov_debug.json"
     coco_annot = CocoAnnotationClass(CLASSES[1:], SUPERCATEGORY) # COCO IS 1-indexed, don't include BG CLASS
 
     root_dir = "./data/LOV/" 
@@ -176,11 +176,13 @@ if __name__ == '__main__':
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
         
-    file_names = ["0000/000001", "0001/000001", "0002/000001"]
+    file_names = ["0000/000001", "0001/000001", "0002/000001"][:1]
 
     data_dir = root_dir + "data/"
     
     total_cnt = 0
+
+    VIS = True
 
     for fx,f in enumerate(file_names):
         base_f = data_dir + f
@@ -206,33 +208,38 @@ if __name__ == '__main__':
         IMG_ID = fx + 1
 
         cnt = 0 
+
+        # cv2.imshow("img", img)
+        # cv2.waitKey(0)
+
         for cx,cls in enumerate(cls_indexes):
 
             # convert labels to polygons
             cls = int(cls)
             cls_contours = get_cls_contours(label, cls)
-            polygons = convert_contours_to_polygons(cls_contours)
+            polygons = convert_contours_to_polygons(cls_contours, eps=0.003)
 
             if len(polygons) == 0:
                 continue
 
-            meta_data = {'center': center[cx].tolist(), 'pose': poses[cx].flatten().tolist()}
+            meta_data = {'center': center[cx].tolist(), 'pose': poses[cx].flatten().tolist(), 'intrinsic_matrix': intrinsic_matrix.tolist()}
 
             cnt += 1
             total_cnt += 1
 
             coco_annot.add_annot(total_cnt, IMG_ID, cls, polygons[0], meta_data)
 
-            # approx = polygons[0]
-            # total = len(approx)
-            # img_copy = img.copy()
-            # for j,p in enumerate(approx):
-            #     cv2.circle(img_copy, tuple(p), 5, BLUE, -1)
-            #     cv2.line(img_copy, tuple(p), tuple(approx[(j+1)%total]), BLUE, 3)
-            # img_copy = cv2.fillPoly(img_copy, [approx], GREEN)
-
-            # cv2.imshow("img", img_copy)
-            # cv2.waitKey(0)
+            if VIS:
+                approx = polygons[0]
+                total = len(approx)
+                img_copy = img.copy()
+                for j,p in enumerate(approx):
+                    cv2.circle(img_copy, tuple(p), 5, BLUE, -1)
+                    cv2.line(img_copy, tuple(p), tuple(approx[(j+1)%total]), BLUE, 3)
+                # img_copy = cv2.fillPoly(img_copy, [approx], GREEN)
+                img_copy = cv2.putText(img_copy, CLASSES[cls], tuple(np.mean(approx, axis=0).astype(np.int32)), cv2.FONT_HERSHEY_COMPLEX, 1.0, BLUE)
+                cv2.imshow("img", img_copy)
+                cv2.waitKey(0)
 
         if cnt == 0:
             continue
