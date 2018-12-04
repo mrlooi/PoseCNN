@@ -4,6 +4,8 @@ import json
 import os.path as osp
 import copy
 import datetime
+from transforms3d.quaternions import mat2quat
+
 
 def convert_datetime_to_string(dt=datetime.datetime.now(), formt="%Y-%m-%d %H:%M:%S"):
     return dt.strftime(formt)
@@ -176,7 +178,7 @@ if __name__ == '__main__':
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
         
-    file_names = ["0000/000001", "0001/000001", "0002/000001"][:1]
+    file_names = ["0000/000001", "0001/000001", "0002/000001"]
 
     data_dir = root_dir + "data/"
     
@@ -203,7 +205,9 @@ if __name__ == '__main__':
         cls_indexes = meta['cls_indexes'].squeeze().astype(np.int32)
         center = np.round(meta['center']).astype(np.int32)
         poses = meta['poses'].astype(np.float32)
-        poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]
+        poses = [poses[:,:,ix] for ix in xrange(len(cls_indexes))]  # 3x4 matrix
+        quats = [mat2quat(p[:,:-1]) for p in poses]
+        poses = [np.hstack((quats[ix],p[:,-1])) for ix,p in enumerate(poses)]
 
         IMG_ID = fx + 1
 
