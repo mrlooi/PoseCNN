@@ -167,6 +167,92 @@ def get_resized_and_rescaled_centers(centers, bbox, discretization_size=14):
     rescaled[bbox[1]:bbox[3],bbox[0]:bbox[2],:] = res
     return rescaled
 
+def backproject_camera(im_depth, meta_data):
+
+    depth = im_depth.astype(np.float32, copy=True) / meta_data['factor_depth']
+
+    # get intrinsic matrix
+    K = meta_data['intrinsic_matrix']
+    K = np.matrix(K)
+    K = np.reshape(K,(3,3))
+    Kinv = np.linalg.inv(K)
+    # if cfg.FLIP_X:
+    #     Kinv[0, 0] = -1 * Kinv[0, 0]
+    #     Kinv[0, 2] = -1 * Kinv[0, 2]
+
+    # compute the 3D points        
+    width = depth.shape[1]
+    height = depth.shape[0]
+
+    # construct the 2D points matrix
+    x, y = np.meshgrid(np.arange(width), np.arange(height))
+    ones = np.ones((height, width), dtype=np.float32)
+    x2d = np.stack((x, y, ones), axis=2).reshape(width*height, 3)
+
+    # backprojection
+    R = Kinv * x2d.transpose()
+
+    # compute the 3D points
+    X = np.multiply(np.tile(depth.reshape(1, width*height), (3, 1)), R)
+
+    return np.array(X)
+
+
+def render_object_pose(im, depth, meta_data, pose_data, points):
+    """
+    im: rgb image of the scene
+    depth: depth image of the scene
+    meta_data: dict({'intrinsic_matrix': K, 'factor_depth': })
+    pose_data: [{"name": "004_sugar_box", "pose": 3x4 or 4x4 matrix}, {...}, ]
+    """
+    if len(pose_data) == 0:
+        return 
+
+    rgb = im.copy()
+    if rgb.dtype == np.uint8:
+        rgb = rgb.astype(np.float32)[:,:,::-1] / 255
+
+    X = backproject_camera(depth, meta_data)
+    cloud_rgb = rgb # .astype(np.float32)[:,:,::-1] / 255
+    cloud_rgb = cloud_rgb.reshape((cloud_rgb.shape[0]*cloud_rgb.shape[1],3))
+    scene_cloud = open3d.PointCloud(); 
+    scene_cloud.points = open3d.Vector3dVector(X.T)
+    scene_cloud.colors = open3d.Vector3dVector(cloud_rgb)
+
+    if len(pose_data) == 0:
+        open3d.draw_geometries([scene_cloud])
+        return 
+
+    all_objects_cloud = open3d.PointCloud()
+    for pd in pose_data:
+        object_cls = pd["cls"]
+        object_pose = pd["pose"]
+        # object_cloud_file = osp.join(object_model_dir,object_name,"points.xyz")
+        object_pose_matrix4f = np.identity(4)
+        object_pose = np.array(object_pose)
+        if object_pose.shape == (4,4):
+            object_pose_matrix4f = object_pose
+        elif object_pose.shape == (3,4):
+            object_pose_matrix4f[:3,:] = object_pose
+        elif len(object_pose) == 7:
+            object_pose_matrix4f[:3,:3] = quat2mat(object_pose[:4])
+            object_pose_matrix4f[:3,-1] = object_pose[4:]
+        else:
+            print("[WARN]: Object pose for %s is not of shape (4,4) or (3,4) or 1-d quat (7), skipping..."%(object_name))
+            continue
+        # object_pose_T = object_pose[:,3]
+        # object_pose_R = object_pose[:,:3]
+
+        object_pts3d = points[object_cls] # read_xyz_file(object_cloud_file)
+        object_cloud = open3d.PointCloud(); 
+        object_cloud.points = open3d.Vector3dVector(object_pts3d)
+        object_cloud.transform(object_pose_matrix4f)
+        all_objects_cloud += object_cloud
+
+        # print("Showing %s"%(object_name))
+    open3d.draw_geometries([scene_cloud, all_objects_cloud])
+
+
 if __name__ == '__main__':
     _classes = ('__background__', '002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', \
                          '007_tuna_fish_can', '008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana', '019_pitcher_base', \
@@ -179,7 +265,7 @@ if __name__ == '__main__':
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
         
-    file_names = ["0000/000001", "0001/000001", "0002/000001"]
+    file_names = ["0000/000001", "0001/000001", "0002/000001", "0003/000001"][-1:]
 
     data_dir = root_dir + "data_orig/"
     data_dir2 = root_dir + "data/"
@@ -231,6 +317,7 @@ if __name__ == '__main__':
 
         visualize(im, depth, label, center, cls_indexes)
         visualize_pose(im, cls_indexes, poses, points, intrinsic_matrix)
+
         vert_centers = visualize_centers(label, cls_indexes, center, poses)
         # visualize_vertmap(vertmap)
         # visualize_centers(vert_centers)
@@ -238,6 +325,10 @@ if __name__ == '__main__':
         # visualize_vertmap(get_resized_and_rescaled_centers(vert_centers, bboxes[0], 16))
 
         cv2.waitKey(0)
+
+        meta_data = {"intrinsic_matrix": intrinsic_matrix, "factor_depth": float(meta['factor_depth'].squeeze())}
+        pose_data = [{"cls": cls_indexes[ix], "pose": p.tolist()} for ix, p in enumerate(poses)]
+        render_object_pose(im, depth, meta_data, pose_data, points)
 
         # flipped = 1
         # if flipped:
