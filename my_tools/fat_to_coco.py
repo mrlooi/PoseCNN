@@ -3,7 +3,7 @@ import cv2
 from transforms3d.quaternions import mat2quat, quat2mat
 import open3d
 
-import pywavefront  # for loading .obj files
+from coco_annotation import CocoAnnotationClass
 
 def get_camera_settings_intrinsic_matrix(camera_settings):
     intrinsic_settings = camera_settings['intrinsic_settings']
@@ -125,14 +125,6 @@ def get_object_data(annotation, object_seg_ids):
         data.append(d)
     return data
 
-def get_object_poses(annotation):
-    objects = annotation['objects']
-    object_poses = []
-    for o in objects:
-        q = o['quaternion_xyzw']
-        t = np.array(o['location']) / 100  # cm to M
-        object_poses.append([q[-1],q[0],q[1],q[2],t[0],t[1],t[2]])
-    return object_poses
 
 def load_points_from_obj_file(obj_file):
     """Loads a Wavefront OBJ file. """
@@ -150,7 +142,7 @@ def load_points_from_obj_file(obj_file):
                 # if swapyz:
                 #     v = v[0], v[2], v[1]
                 vertices.append(v)
-    return np.array(vertices)
+    return np.array(vertices).astype(np.float32)
 
 def download_models():
     """
@@ -175,35 +167,132 @@ def get_2d_projected_points(points, intrinsic_matrix, M):
     x = np.transpose(x2d[:2,:], [1,0]).astype(np.int32)
     return x
 
+def get_valid_objects(im, seg_mask, object_data, points, intrinsic_matrix, min_visibility=0.0, min_proj_pct=0.4):
+    h,w = im.shape[:2]
+
+    valid_object_data = []
+
+    close_kernel = np.ones((5,5),np.uint8)
+
+    for pd in object_data:
+        cls = pd["cls"]
+        seg_id = pd['seg_id']
+        vis = pd['visibility']
+
+        if vis < min_visibility:
+            continue 
+
+        M = pd['transform']
+
+        cls_pts = np.vstack((points[cls], [0.,0.,0.])) # the object points are centered at [0,0,0]. Get the 2D projection of it in pixels
+        # projection
+
+        x = get_2d_projected_points(cls_pts, intrinsic_matrix, M)
+        vertex_center = x[-1].astype(np.int32)
+        x = x[:-1]
+
+        if not (0 <= vertex_center[0] < w and 0 <= vertex_center[1] < h):
+            continue
+
+        mask = np.zeros((h,w), dtype=np.uint8)
+
+        total_pts = len(x)
+        proj_pts = []
+        for px in x:
+            if 0 <= px[0] < w and 0 <= px[1] < h:
+                if seg_mask[px[1],px[0]] == seg_id:
+                    cv2.circle(mask, tuple(px), 2, 255, -1)
+                    proj_pts.append(px)
+        pct = float(len(proj_pts)) / total_pts
+        if pct < min_proj_pct:
+            continue
+
+        closing = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+
+        _, contours, hierarchy = cv2.findContours(closing,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+        contours = sorted(contours, key = cv2.contourArea, reverse = True)
+        polygons = convert_contours_to_polygons(contours)
+
+        pd['center'] = vertex_center
+        pd['polygons'] = polygons
+        valid_object_data.append(pd)
+
+    return valid_object_data
+
 def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
     im_copy = im.copy()
+    im_copy2 = im.copy()
     h,w = im_copy.shape[:2]
-    mask = np.zeros((h,w,3), dtype=np.uint8)
+    canvas = np.zeros((h,w,3), dtype=np.uint8)
+
+    close_kernel = np.ones((5,5),np.uint8)
 
     for pd in object_data:
         cls = pd["cls"]
         pose = pd["pose"]
         seg_id = pd['seg_id']
         vis = pd['visibility']
-        if vis < 0.2:
-            continue 
+        # if vis < 0.2:
+        #     continue 
 
         color = get_random_color()
-        cls_pts = points[cls]
+        cls_pts = np.vstack((points[cls], [0.,0.,0.])) # the object points are centered at [0,0,0]. Get the 2D projection of it in pixels
 
         # projection
-        M = get_4x4_transform(pose)
-        if M is None:
-            continue
+        M = pd['transform']
+
         x = get_2d_projected_points(cls_pts, intrinsic_matrix, M)
+        vertex_center = x[-1].astype(np.int32)
+        x = x[:-1]
+
+        if not (0 <= vertex_center[0] < w and 0 <= vertex_center[1] < h):
+            continue
+
+        mask = np.zeros((h,w), dtype=np.uint8)
+
+        total_pts = len(x)
+        proj_pts = []
         for px in x:
             px = tuple(px)
-            cv2.circle(im_copy, px, 3, color, -1)
-            if seg_mask[px[1],px[0]] == seg_id:
-                cv2.circle(mask, px, 3, color, -1)
+            if 0 <= px[0] < w and 0 <= px[1] < h:
+                cv2.circle(im_copy, px, 3, color, -1)
+                if seg_mask[px[1],px[0]] == seg_id:
+                    cv2.circle(canvas, px, 3, color, -1)
+                    cv2.circle(mask, px, 2, 255, -1)
+                    proj_pts.append(px)
+        pct = float(len(proj_pts)) / total_pts
+        if pct < 0.4:
+            continue
+        proj_pts = np.array(proj_pts)
+        mean_pt = np.mean(proj_pts, axis=0).astype(np.int32)
+        cv2.circle(im_copy2, (vertex_center[0],vertex_center[1]), 3, (255,0,0), -1)
+        try:
+            im_copy2 = cv2.putText(im_copy2, "%.2f"%pct, tuple(mean_pt), cv2.FONT_HERSHEY_COMPLEX, 0.6, (255,255,255))
+        except Exception, e:
+            print(mean_pt)
+            continue
+
+        closing = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
+        # cv2.imshow("mask", mask)
+        # cv2.imshow("closing", closing)
+        # cv2.waitKey(0)
+
+        _, contours, hierarchy = cv2.findContours(closing,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+        contours = sorted(contours, key = cv2.contourArea, reverse = True)
+        polygons = convert_contours_to_polygons(contours)
+        approx = polygons[0]
+        total = len(approx)
+        for j,p in enumerate(approx):
+            cv2.circle(im_copy2, tuple(p), 2, color, -1)
+            cv2.line(im_copy2, tuple(p), tuple(approx[(j+1)%total]), color, 1)
+        cv2.imshow("polygons", im_copy2)
 
     cv2.imshow("proj_poses", im_copy)
-    cv2.imshow("proj_poses_refined", mask)
+    cv2.imshow("proj_poses_refined", canvas)
 
 
 def draw_cuboid_lines(img2, points, color):
@@ -223,6 +312,31 @@ def draw_cuboid_lines(img2, points, color):
     cv2.line(img2, points[7], points[3], color)
     cv2.line(img2, points[5], points[1], color)
     cv2.line(img2, points[2], points[6], color)
+
+def get_cls_contours(label, cls):
+    mask = np.zeros((label.shape), dtype=np.uint8)
+    y,x = np.where(label==cls)
+    mask[y,x] = 255
+
+    _, contours, hierarchy = cv2.findContours(mask,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) == 0:
+        return []
+    contours = sorted(contours, key = cv2.contourArea, reverse = True)
+    return contours
+
+def approx_contour(cnt, eps=0.005):
+    if len(cnt) == 0:
+        return []
+    arclen = cv2.arcLength(cnt, True)
+    epsilon = arclen * eps
+    approx = cv2.approxPolyDP(cnt, epsilon, True)
+    approx = approx.squeeze()
+    return approx
+
+def convert_contours_to_polygons(contours, eps=0.005):
+    polygons = [approx_contour(cnt, eps) for cnt in contours]
+    polygons = [p for p in polygons if len(p) >= 3] # need at least 3 points to form a polygon
+    return polygons
 
 def visualize_proj_cuboid(im, object_data):
     im_copy = im.copy()
@@ -247,11 +361,27 @@ if __name__ == '__main__':
     import glob
     import json 
 
+    CLASSES = ('__background__', '002_master_chef_can', '003_cracker_box', '004_sugar_box', '005_tomato_soup_can', '006_mustard_bottle', \
+                     '007_tuna_fish_can', '008_pudding_box', '009_gelatin_box', '010_potted_meat_can', '011_banana', '019_pitcher_base', \
+                     '021_bleach_cleanser', '024_bowl', '025_mug', '035_power_drill', '036_wood_block', '037_scissors', '040_large_marker', \
+                     '051_large_clamp', '052_extra_large_clamp', '061_foam_brick')
+    CLASSES_INDEX = dict((c, ix) for ix,c in enumerate(CLASSES))
+
     ROOT_DIR = "/home/vincent/hd/datasets/FAT"
     MODEL_DIR = ROOT_DIR + "/models"
     SUPERCATEGORY = "FAT"
 
+    points = {}
+
+    coco_annot = CocoAnnotationClass(CLASSES[1:], SUPERCATEGORY) # COCO IS 1-indexed, don't include BG CLASS
+
+    IMG_ID = 0
+    ANNOT_ID = 0
+
+    # LOAD DIR SETTINGS
+
     # sample_dir = ROOT_DIR + "/single/002_master_chef_can_16k/temple_0"
+    # fat_dir = "/"
     sample_dir = ROOT_DIR + "/mixed/temple_0"
     camera_type = "left"
     camera_settings_json = sample_dir + "/_camera_settings.json"
@@ -262,52 +392,84 @@ if __name__ == '__main__':
     with open(object_settings_json, "r") as f:
         object_settings = json.load(f)
     camera_settings = camera_settings['camera_settings']
+    intrinsics = dict((c['name'], get_camera_settings_intrinsic_matrix(c)) for c in camera_settings)
     OBJ_CLASSES = object_settings["exported_object_classes"]
-    # CLASSES = [c.lower().replace("_16k","") for c in OBJ_CLASSES]
-    # cls_indexes = dict((k,ix) for ix, k in enumerate(OBJ_CLASSES))
     object_settings = object_settings["exported_objects"]
     object_seg_ids = dict((o['class'], o['segmentation_class_id']) for o in object_settings)
-    for cs in camera_settings:
-        if cs['name'] == camera_type:
-            camera_settings = cs
-            break
-
+            
     # Convert transforms from column-major to row-major, and from cm to m
     object_transforms = dict((o['class'], np.array(o['fixed_model_transform']).transpose() / 100) for o in object_settings)
-    intrinsic_matrix = get_camera_settings_intrinsic_matrix(camera_settings)
-
-    points = {}
+    
     for cls in OBJ_CLASSES:
-        obj_file = MODEL_DIR + "/%s/google_16k/textured.obj"%(cls.lower().replace("_16k",""))
-        obj_points = load_points_from_obj_file(obj_file)
-        cloud = create_cloud(obj_points, T=object_transforms[cls])
-        points[cls] = np.asarray(cloud.points)
-        # open3d.draw_geometries([cloud, coord_frame])
+        if cls not in points:
+            ocls = cls.lower().replace("_16k","")
+            obj_file = MODEL_DIR + "/%s/google_16k/textured.obj"%(ocls)
+            obj_points = load_points_from_obj_file(obj_file)
+            cloud = create_cloud(obj_points, T=object_transforms[cls])
+            points[cls] = np.asarray(cloud.points)
+            xyz_file = MODEL_DIR + "/%s/points.xyz"%(ocls)
+            obj_points = np.savetxt(xyz_file, obj_points[::3])
+            # open3d.draw_geometries([cloud, coord_frame])
 
-    sample_file = sample_dir + "/000000.%s"%camera_type
+    # LOAD FILES IN DIR
+    dir_files = glob.glob("%s/*.jpg"%(sample_dir))[:2]
+    total_files = len(dir_files)
+    print("%s folder: %d images"%(sample_dir, total_files))
+    for fx,file in enumerate(dir_files):
+        sample_file = file.replace(".jpg","")
+        # camera_type = sample_file
+        # sample_file = sample_dir + "/000000.%s"%camera_type
+        camera_type = sample_file.split(".")[-1]  # left or right
+        intrinsic_matrix = intrinsics[camera_type]
 
-    annot_file = sample_file + ".json"
-    img_file = sample_file + ".jpg"
-    seg_file = sample_file + ".seg.png"
-    depth_file = sample_file + ".depth.png"
+        annot_file = sample_file + ".json"
+        img_file = sample_file + ".jpg"
+        seg_file = sample_file + ".seg.png"
+        depth_file = sample_file + ".depth.png"
 
+        with open(annot_file, "r") as f:
+            annotation = json.load(f)
 
-    with open(annot_file, "r") as f:
-        annotation = json.load(f)
+        img = cv2.imread(img_file)
+        if img is None:
+            print("Could not find %s"%(img_file))
+            continue
 
-    object_data = get_object_data(annotation, object_seg_ids)
+        label = cv2.imread(seg_file, cv2.IMREAD_UNCHANGED)
+        if label is None:
+            print("Could not find %s"%(seg_file))
+            continue
 
-    # VISUALIZE
+        object_data = get_object_data(annotation, object_seg_ids)
+        if len(object_data) == 0:
+            continue
+        IMG_ID += 1
 
-    factor_depth = 10000
-    img = cv2.imread(img_file)
-    img_height, img_width, _ = img.shape
-    label = cv2.imread(seg_file, cv2.IMREAD_UNCHANGED)
-    depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
-    # render_depth_pointcloud(img, depth, object_data, points, intrinsic_matrix, factor_depth)
-    visualize_pose(img, label, object_data, points, intrinsic_matrix)
-    visualize_proj_cuboid(img, object_data)
+        valid_object_data = get_valid_objects(img, label, object_data, points, intrinsic_matrix)
+        if len(valid_object_data) == 0:
+            continue
 
-    cv2.imshow("img", img)
-    cv2.imshow("seg", label)
-    cv2.waitKey(0)
+        for od in valid_object_data:
+            ANNOT_ID += 1
+            cls = od['cls'].lower().replace("_16k","")
+            polygons = od['polygons']
+            cls_idx = CLASSES_INDEX[cls]
+            meta_data = {'center': od['center'].tolist(), 'pose': od['pose'].flatten().tolist(), 'intrinsic_matrix': intrinsic_matrix.tolist()}
+            coco_annot.add_annot(ANNOT_ID, IMG_ID, cls_idx, polygons[0], meta_data)
+
+        img_height, img_width = img.shape[:2]
+        img_name = img_file.replace(ROOT_DIR, "").strip("/")
+        coco_annot.add_image(IMG_ID, img_width, img_height, img_name)#, depth_name, factor_depth)
+
+        print("Loaded %d of %d (%s)"%(fx, total_files, sample_dir))
+
+        # # VISUALIZE
+        # visualize_pose(img, label, object_data, points, intrinsic_matrix)
+        # visualize_proj_cuboid(img, object_data)
+        # cv2.imshow("img", img)
+        # cv2.imshow("seg", label)
+        # cv2.waitKey(0)
+        
+        # depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
+        # factor_depth = 10000
+        # render_depth_pointcloud(img, depth, object_data, points, intrinsic_matrix, factor_depth)

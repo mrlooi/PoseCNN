@@ -1,105 +1,9 @@
 import numpy as np
 import cv2
-import json
 import os.path as osp
-import copy
-import datetime
 from transforms3d.quaternions import mat2quat
 
-
-def convert_datetime_to_string(dt=datetime.datetime.now(), formt="%Y-%m-%d %H:%M:%S"):
-    return dt.strftime(formt)
-
-class CocoAnnotationClass(object):
-    def __init__(self, classes, supercategory=""):
-        self.classes = classes
-        self.map_classes_idx = {c: ix+1 for ix,c in enumerate(classes)}  # coco is 1-indexed
-        self.map_idx_classes = {v:k for k,v in self.map_classes_idx.items()}
-        self.data = self._get_default_data()
-        for c,idx in self.map_classes_idx.items():
-            self._add_category(c,idx,supercategory)
-
-    def _get_default_data(self):
-        default_d = {
-            "info": {
-                "year" : 2018, 
-                "version" : "", 
-                "description" : "", 
-                "contributor" : "", 
-                "url" : "", 
-                "date_created" : convert_datetime_to_string()
-            },
-            "images": [],
-            "annotations": [],
-            "categories": [],
-            "licenses": [
-                {
-                    "id" : 1, 
-                    "name" : "", 
-                    "url" : ""
-                }
-            ]
-        }
-        return default_d
-
-    def set_classes(self, classes):
-        self.classes = classes
-
-    def clear(self):
-        self.data = self._get_default_data()
-
-    def _add_category(self, name, id=None, supercategory=""):
-        cat_id = len(self.data["categories"]) + 1 if id is None else id
-        cat_data = {
-                    "id" : cat_id, 
-                    "name" : name, 
-                    "supercategory" : supercategory
-                }
-        self.data["categories"].append(cat_data)
-
-    def add_annot(self, id, img_id, img_cls, seg_data, meta_data={}, is_crowd=0):
-        """ONLY SUPPORTS seg polygons of len 1 i.e. cannot support multiple polygons that refer to the same id"""
-        if isinstance(img_cls, str):
-            if img_cls not in self.map_classes_idx:
-                print("%s not in coco classes!"%(img_cls))
-                return 
-            cat_id = self.map_classes_idx[img_cls]
-        else:
-            assert img_cls in self.map_idx_classes
-            cat_id = img_cls
-        seg_data_arr = np.array(seg_data)
-        assert(len(seg_data_arr.shape) == 2)
-        bbox = np.array([np.amin(seg_data_arr, axis=0), np.amax(seg_data_arr, axis=0)]).reshape(4)
-        bbox[2:] -= bbox[:2]
-        bbox = bbox.tolist()
-        area = cv2.contourArea(seg_data_arr)
-        annot_data =    {
-                    "id" : id,
-                    "image_id" : img_id,
-                    "category_id" : cat_id,
-                    "segmentation" : [seg_data_arr.flatten().tolist()],
-                    "area" : area,
-                    "bbox" : bbox,
-                    "iscrowd" : is_crowd,
-                    "meta": meta_data # CUSTOM
-                }
-        self.data["annotations"].append(annot_data)
-
-    def add_image(self, id, width, height, file_name, date_captured=convert_datetime_to_string()):
-        img_data =  {
-                    "id" : id,
-                    "width" : width,
-                    "height" : height,
-                    "file_name" : file_name,
-                    "license" : 1,
-                    "flickr_url" : "",
-                    "coco_url" : "",
-                    "date_captured" : date_captured
-                }
-        self.data["images"].append(img_data)
-
-    def get_annot_json(self):
-        return copy.deepcopy(self.data)
+from coco_annotation import CocoAnnotationClass
 
 
 def get_cls_contours(label, cls):
@@ -178,7 +82,7 @@ if __name__ == '__main__':
         point_file = root_dir + "models/%s/points.xyz"%(cls)
         points.append(np.loadtxt(point_file))
         
-    file_names = ["0000/000001", "0001/000001", "0002/000001"]
+    file_names = ["0000/000001", "0001/000001", "0002/000001", "0003/000001", "0004/000001", "0005/000001", "0006/000001", "0007/000001", "0008/000001"]
 
     data_dir = root_dir + "data/"
     
@@ -186,12 +90,18 @@ if __name__ == '__main__':
 
     VIS = True
 
+    factor_depth = 10000
+
     for fx,f in enumerate(file_names):
         base_f = data_dir + f
         im_file = base_f + "-color.png"
-        # depth_file = base_f + "-depth.png"
+        depth_file = base_f + "-depth.png"
         label_file = base_f + "-label.png"
         meta_file = base_f + "-meta.mat"
+
+        assert osp.exists(im_file) and osp.exists(label_file) and osp.exists(meta_file)
+        if not osp.exists(depth_file):
+            depth_file = ""
 
         # load img and gt mask labels
         img = cv2.imread(im_file)
@@ -249,9 +159,8 @@ if __name__ == '__main__':
             continue
 
         img_name = im_file.replace(data_dir, "")
-        coco_annot.add_image(IMG_ID, img_width, img_height, img_name)
+        depth_name = depth_file.replace(data_dir, "")
+        coco_annot.add_image(IMG_ID, img_width, img_height, img_name, depth_name, factor_depth)
 
-    with open(coco_out_file, "w") as f:
-        json.dump(coco_annot.get_annot_json(), f)
-        print("Saved to %s"%(coco_out_file))
+    coco_annot.save(coco_out_file)
 

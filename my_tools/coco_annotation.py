@@ -1,0 +1,112 @@
+import numpy as np
+import cv2
+import json
+import os.path as osp
+import copy
+import datetime
+
+
+
+def convert_datetime_to_string(dt=datetime.datetime.now(), formt="%Y-%m-%d %H:%M:%S"):
+    return dt.strftime(formt)
+
+class CocoAnnotationClass(object):
+    def __init__(self, classes, supercategory=""):
+        self.classes = classes
+        self.map_classes_idx = {c: ix+1 for ix,c in enumerate(classes)}  # coco is 1-indexed
+        self.map_idx_classes = {v:k for k,v in self.map_classes_idx.items()}
+        self.data = self._get_default_data()
+        for c,idx in self.map_classes_idx.items():
+            self._add_category(c,idx,supercategory)
+
+    def _get_default_data(self):
+        default_d = {
+            "info": {
+                "year" : 2018, 
+                "version" : "", 
+                "description" : "", 
+                "contributor" : "", 
+                "url" : "", 
+                "date_created" : convert_datetime_to_string()
+            },
+            "images": [],
+            "annotations": [],
+            "categories": [],
+            "licenses": [
+                {
+                    "id" : 1, 
+                    "name" : "", 
+                    "url" : ""
+                }
+            ]
+        }
+        return default_d
+
+    def set_classes(self, classes):
+        self.classes = classes
+
+    def clear(self):
+        self.data = self._get_default_data()
+
+    def _add_category(self, name, id=None, supercategory=""):
+        cat_id = len(self.data["categories"]) + 1 if id is None else id
+        cat_data = {
+                    "id" : cat_id, 
+                    "name" : name, 
+                    "supercategory" : supercategory
+                }
+        self.data["categories"].append(cat_data)
+
+    def add_annot(self, id, img_id, img_cls, seg_data, meta_data={}, is_crowd=0):
+        """ONLY SUPPORTS seg polygons of len 1 i.e. cannot support multiple polygons that refer to the same id"""
+        if isinstance(img_cls, str):
+            if img_cls not in self.map_classes_idx:
+                print("%s not in coco classes!"%(img_cls))
+                return 
+            cat_id = self.map_classes_idx[img_cls]
+        else:
+            assert img_cls in self.map_idx_classes
+            cat_id = img_cls
+        seg_data_arr = np.array(seg_data)
+        assert(len(seg_data_arr.shape) == 2)
+        bbox = np.array([np.amin(seg_data_arr, axis=0), np.amax(seg_data_arr, axis=0)]).reshape(4)
+        bbox[2:] -= bbox[:2]
+        bbox = bbox.tolist()
+        area = cv2.contourArea(seg_data_arr)
+        annot_data =    {
+                    "id" : id,
+                    "image_id" : img_id,
+                    "category_id" : cat_id,
+                    "segmentation" : [seg_data_arr.flatten().tolist()],
+                    "area" : area,
+                    "bbox" : bbox,
+                    "iscrowd" : is_crowd,
+                    "meta": meta_data # CUSTOM
+                }
+        self.data["annotations"].append(annot_data)
+
+    def add_image(self, id, width, height, file_name, depth_file_name=None, factor_depth=1.0, date_captured=convert_datetime_to_string()):
+        img_data =  {
+                    "id" : id,
+                    "width" : width,
+                    "height" : height,
+                    "file_name" : file_name,
+                    "license" : 1,
+                    "flickr_url" : "",
+                    "coco_url" : "",
+                    "date_captured" : date_captured
+                }
+        if isinstance(depth_file_name, str) and len(depth_file_name) > 0:
+            img_data["depth_file_name"] = depth_file_name
+            img_data["factor_depth"] = factor_depth
+
+        self.data["images"].append(img_data)
+
+    def get_annot_json(self):
+        return copy.deepcopy(self.data)
+
+    def save(self, out_file):
+        with open(out_file, "w") as f:
+            json.dump(self.data, f)
+            print("Saved to %s"%(out_file))
+
