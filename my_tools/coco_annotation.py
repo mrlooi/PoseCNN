@@ -13,11 +13,14 @@ def convert_datetime_to_string(dt=datetime.datetime.now(), formt="%Y-%m-%d %H:%M
 class CocoAnnotationClass(object):
     def __init__(self, classes, supercategory=""):
         self.classes = classes
-        self.map_classes_idx = {c: ix+1 for ix,c in enumerate(classes)}  # coco is 1-indexed
-        self.map_idx_classes = {v:k for k,v in self.map_classes_idx.items()}
         self.data = self._get_default_data()
+        self._init_var()
         for c,idx in self.map_classes_idx.items():
             self._add_category(c,idx,supercategory)
+
+    def _init_var(self):
+        self.map_classes_idx = {c: ix+1 for ix,c in enumerate(self.classes)}  # coco is 1-indexed
+        self.map_idx_classes = {v:k for k,v in self.map_classes_idx.items()}
 
     def _get_default_data(self):
         default_d = {
@@ -110,3 +113,9 @@ class CocoAnnotationClass(object):
             json.dump(self.data, f)
             print("Saved to %s"%(out_file))
 
+    def load(self, json_file):
+        with open(json_file, "r") as f:
+            self.data = json.load(f)
+            print("Loaded from %s"%(json_file))
+        self.classes = [c['name'] for c in self.data["categories"]]
+        self._init_var()

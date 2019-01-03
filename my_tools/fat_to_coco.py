@@ -270,7 +270,7 @@ def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
         cv2.circle(im_copy2, (vertex_center[0],vertex_center[1]), 3, (255,0,0), -1)
         try:
             im_copy2 = cv2.putText(im_copy2, "%.2f"%pct, tuple(mean_pt), cv2.FONT_HERSHEY_COMPLEX, 0.6, (255,255,255))
-        except Exception, e:
+        except Exception:#, e:
             print(mean_pt)
             continue
 
@@ -408,8 +408,10 @@ if __name__ == '__main__':
             cloud = create_cloud(obj_points, T=object_transforms[cls])
             points[cls] = np.asarray(cloud.points)
             xyz_file = MODEL_DIR + "/%s/points.xyz"%(ocls)
-            obj_points = np.savetxt(xyz_file, obj_points[::3])
+            obj_points = np.savetxt(xyz_file, points[cls][::3])
             # open3d.draw_geometries([cloud, coord_frame])
+
+    factor_depth = 10000
 
     # LOAD FILES IN DIR
     dir_files = glob.glob("%s/*.jpg"%(sample_dir))[:2]
@@ -459,11 +461,12 @@ if __name__ == '__main__':
 
         img_height, img_width = img.shape[:2]
         img_name = img_file.replace(ROOT_DIR, "").strip("/")
-        coco_annot.add_image(IMG_ID, img_width, img_height, img_name)#, depth_name, factor_depth)
+        depth_name = depth_file.replace(ROOT_DIR, "").strip("/")
+        coco_annot.add_image(IMG_ID, img_width, img_height, img_name, depth_name, factor_depth)
 
-        print("Loaded %d of %d (%s)"%(fx, total_files, sample_dir))
+        print("Loaded %d of %d (%s)"%(fx+1, total_files, sample_dir))
 
-        # # VISUALIZE
+        # VISUALIZE
         # visualize_pose(img, label, object_data, points, intrinsic_matrix)
         # visualize_proj_cuboid(img, object_data)
         # cv2.imshow("img", img)
@@ -471,5 +474,6 @@ if __name__ == '__main__':
         # cv2.waitKey(0)
         
         # depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
-        # factor_depth = 10000
         # render_depth_pointcloud(img, depth, object_data, points, intrinsic_matrix, factor_depth)
+    
+    coco_annot.save("coco_fat_debug.json")
