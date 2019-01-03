@@ -153,7 +153,26 @@ def download_models():
         do wget 'http://ycb-benchmarks.s3-website-us-east-1.amazonaws.com/data/google/'$i'_google_16k.tgz'; done
     """
 
-def get_2d_projected_points(points, intrinsic_matrix, M):
+def get_2d_projected_points(points, intrinsic_matrix):#, M):
+    """
+    points: (N,3) np array
+    intrinsic matrix: 3x3 matrix
+    """
+    x3d = points.transpose()
+
+    # projection
+    # RT = M[:3,:]
+    x2d = np.matmul(intrinsic_matrix, x3d)
+    x2d[0, :] = np.divide(x2d[0, :], x2d[2, :])
+    x2d[1, :] = np.divide(x2d[1, :], x2d[2, :])
+    x = np.transpose(x2d[:2,:], [1,0]).astype(np.int32)
+    return x
+
+def transform_points(points, M):
+    """
+    points: (N,3) np array
+    M: 4x4 matrix
+    """
     x3d = np.ones((4, len(points)), dtype=np.float32)
     x3d[0, :] = points[:,0]
     x3d[1, :] = points[:,1]
@@ -161,18 +180,16 @@ def get_2d_projected_points(points, intrinsic_matrix, M):
 
     # projection
     RT = M[:3,:]
-    x2d = np.matmul(intrinsic_matrix, np.matmul(RT, x3d))
-    x2d[0, :] = np.divide(x2d[0, :], x2d[2, :])
-    x2d[1, :] = np.divide(x2d[1, :], x2d[2, :])
-    x = np.transpose(x2d[:2,:], [1,0]).astype(np.int32)
-    return x
+    pts_T = np.matmul(RT, x3d)
+    pts_T = pts_T.transpose()  # (3,N) to (N,3)
+    return pts_T
 
 def get_valid_objects(im, seg_mask, object_data, points, intrinsic_matrix, min_visibility=0.0, min_proj_pct=0.4):
     h,w = im.shape[:2]
 
     valid_object_data = []
 
-    close_kernel = np.ones((5,5),np.uint8)
+    close_kernel = np.ones((7,7),np.uint8)
 
     for pd in object_data:
         cls = pd["cls"]
@@ -187,7 +204,8 @@ def get_valid_objects(im, seg_mask, object_data, points, intrinsic_matrix, min_v
         cls_pts = np.vstack((points[cls], [0.,0.,0.])) # the object points are centered at [0,0,0]. Get the 2D projection of it in pixels
         # projection
 
-        x = get_2d_projected_points(cls_pts, intrinsic_matrix, M)
+        pts_transformed = transform_points(cls_pts, M)
+        x = get_2d_projected_points(pts_transformed, intrinsic_matrix)
         vertex_center = x[-1].astype(np.int32)
         x = x[:-1]
 
@@ -201,7 +219,8 @@ def get_valid_objects(im, seg_mask, object_data, points, intrinsic_matrix, min_v
         for px in x:
             if 0 <= px[0] < w and 0 <= px[1] < h:
                 if seg_mask[px[1],px[0]] == seg_id:
-                    cv2.circle(mask, tuple(px), 2, 255, -1)
+                    # cv2.circle(mask, tuple(px), 1, 255, -1)
+                    mask[px[1],px[0]] = 255
                     proj_pts.append(px)
         pct = float(len(proj_pts)) / total_pts
         if pct < min_proj_pct:
@@ -217,6 +236,9 @@ def get_valid_objects(im, seg_mask, object_data, points, intrinsic_matrix, min_v
 
         pd['center'] = vertex_center
         pd['polygons'] = polygons
+        # add min max of points
+        pd['bounds'] = np.array([np.min(pts_transformed, axis=0), np.max(pts_transformed, axis=0)])
+        pd['centroid'] = pts_transformed[-1]
         valid_object_data.append(pd)
 
     return valid_object_data
@@ -243,7 +265,8 @@ def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
         # projection
         M = pd['transform']
 
-        x = get_2d_projected_points(cls_pts, intrinsic_matrix, M)
+        pts_transformed = transform_points(cls_pts, M)
+        x = get_2d_projected_points(pts_transformed, intrinsic_matrix)
         vertex_center = x[-1].astype(np.int32)
         x = x[:-1]
 
@@ -456,7 +479,13 @@ if __name__ == '__main__':
             cls = od['cls'].lower().replace("_16k","")
             polygons = od['polygons']
             cls_idx = CLASSES_INDEX[cls]
-            meta_data = {'center': od['center'].tolist(), 'pose': od['pose'].flatten().tolist(), 'intrinsic_matrix': intrinsic_matrix.tolist()}
+            meta_data = {
+                'center': od['center'].tolist(),
+                'centroid': od['centroid'].tolist(),
+                'bounds': od['bounds'].tolist(),
+                'pose': od['pose'].flatten().tolist(),
+                'intrinsic_matrix': intrinsic_matrix.tolist()
+             }
             coco_annot.add_annot(ANNOT_ID, IMG_ID, cls_idx, polygons[0], meta_data)
 
         img_height, img_width = img.shape[:2]
@@ -466,7 +495,7 @@ if __name__ == '__main__':
 
         print("Loaded %d of %d (%s)"%(fx+1, total_files, sample_dir))
 
-        # VISUALIZE
+        # # """VISUALIZE"""
         # visualize_pose(img, label, object_data, points, intrinsic_matrix)
         # visualize_proj_cuboid(img, object_data)
         # cv2.imshow("img", img)
