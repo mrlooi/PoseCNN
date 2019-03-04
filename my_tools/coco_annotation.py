@@ -25,7 +25,7 @@ class CocoAnnotationClass(object):
     def _get_default_data(self):
         default_d = {
             "info": {
-                "year" : 2018, 
+                "year" : 2019, 
                 "version" : "", 
                 "description" : "", 
                 "contributor" : "", 
@@ -61,7 +61,9 @@ class CocoAnnotationClass(object):
         self.data["categories"].append(cat_data)
 
     def add_annot(self, id, img_id, img_cls, seg_data, meta_data={}, is_crowd=0):
-        """ONLY SUPPORTS seg polygons of len 1 i.e. cannot support multiple polygons that refer to the same id"""
+        """
+        CAN NOW SUPPORT MULTIPLE SEG POLYGONS
+        DEPRECATED: ONLY SUPPORTS seg polygons of len 1 i.e. cannot support multiple polygons that refer to the same id"""
         if isinstance(img_cls, str):
             if img_cls not in self.map_classes_idx:
                 print("%s not in coco classes!"%(img_cls))
@@ -70,17 +72,24 @@ class CocoAnnotationClass(object):
         else:
             assert img_cls in self.map_idx_classes
             cat_id = img_cls
-        seg_data_arr = np.array(seg_data)
-        assert(len(seg_data_arr.shape) == 2)
-        bbox = np.array([np.amin(seg_data_arr, axis=0), np.amax(seg_data_arr, axis=0)]).reshape(4)
+        # seg_data_arr = np.array(seg_data)
+        # if len(seg_data_arr.shape) == 2:
+        #     seg_data_arr = seg_data_arr[None,:]
+        # assert seg_data_arr.shape[-1] == 2 # x,y
+        if len(seg_data) == 0:
+            print("Polygon (seg_data) is empty!")
+            return 
+        seg_data_arr = seg_data if type(seg_data[0][0]) in [list, np.ndarray] else [seg_data]
+        concat_arr = np.concatenate(seg_data_arr)
+        bbox = np.array([np.amin(concat_arr, axis=0), np.amax(concat_arr, axis=0)]).reshape(4)
         bbox[2:] -= bbox[:2]
         bbox = bbox.tolist()
-        area = cv2.contourArea(seg_data_arr)
+        area = sum([cv2.contourArea(arr) for arr in seg_data_arr])
         annot_data =    {
                     "id" : id,
                     "image_id" : img_id,
                     "category_id" : cat_id,
-                    "segmentation" : [seg_data_arr.flatten().tolist()],
+                    "segmentation" : [arr.flatten().tolist() for arr in seg_data_arr],
                     "area" : area,
                     "bbox" : bbox,
                     "iscrowd" : is_crowd,
