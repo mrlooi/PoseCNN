@@ -97,7 +97,7 @@ class CocoAnnotationClass(object):
                 }
         self.data["annotations"].append(annot_data)
 
-    def add_image(self, id, width, height, file_name, depth_file_name=None, factor_depth=1.0, date_captured=convert_datetime_to_string()):
+    def add_image(self, id, width, height, file_name, meta_data={}, date_captured=convert_datetime_to_string()):
         img_data =  {
                     "id" : id,
                     "width" : width,
@@ -106,11 +106,9 @@ class CocoAnnotationClass(object):
                     "license" : 1,
                     "flickr_url" : "",
                     "coco_url" : "",
-                    "date_captured" : date_captured
+                    "date_captured" : date_captured,
+                    "meta": meta_data
                 }
-        if isinstance(depth_file_name, str) and len(depth_file_name) > 0:
-            img_data["depth_file_name"] = depth_file_name
-            img_data["factor_depth"] = factor_depth
 
         self.data["images"].append(img_data)
 

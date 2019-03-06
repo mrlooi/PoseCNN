@@ -290,7 +290,8 @@ def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
             continue
         proj_pts = np.array(proj_pts)
         mean_pt = np.mean(proj_pts, axis=0).astype(np.int32)
-        cv2.circle(im_copy2, (vertex_center[0],vertex_center[1]), 3, (255,0,0), -1)
+        center_pt = (vertex_center[0],vertex_center[1])
+        cv2.circle(im_copy2, center_pt, 3, (255,0,0), -1)
         try:
             im_copy2 = cv2.putText(im_copy2, "%.2f"%pct, tuple(mean_pt), cv2.FONT_HERSHEY_COMPLEX, 0.6, (255,255,255))
         except Exception:#, e:
@@ -312,6 +313,21 @@ def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
         for j,p in enumerate(approx):
             cv2.circle(im_copy2, tuple(p), 2, color, -1)
             cv2.line(im_copy2, tuple(p), tuple(approx[(j+1)%total]), color, 1)
+
+        # draw 3 axis pose
+        # from https://github.com/jerryhouuu/Face-Yaw-Roll-Pitch-from-Pose-Estimation-using-OpenCV/blob/master/pose_estimation.py
+        axis = np.float32([[0.1,0,0],  # blue axis
+                              [0,0.1,0], # green axis
+                              [0,0,0.1]])  # red axis
+        R = M[:3,:3]
+        T = M[:3,-1]
+        dist_coeffs = np.zeros((4,1)) # Assuming no lens distortion
+        imgpts, jac = cv2.projectPoints(axis, R, T, intrinsic_matrix, dist_coeffs)
+        _imgpts, jac = cv2.projectPoints(axis, np.identity(3), T, intrinsic_matrix, dist_coeffs)
+        # print(imgpts)
+        cv2.line(im_copy2, center_pt, tuple(imgpts[0].ravel()), (255,0,0), 3) #BLUE
+        cv2.line(im_copy2, center_pt, tuple(imgpts[1].ravel()), (0,255,0), 3) #GREEN
+        cv2.line(im_copy2, center_pt, tuple(imgpts[2].ravel()), (0,0,255), 3) #RED
         cv2.imshow("polygons", im_copy2)
 
     cv2.imshow("proj_poses", im_copy)
@@ -319,6 +335,8 @@ def visualize_pose(im, seg_mask, object_data, points, intrinsic_matrix):
 
 
 def draw_cuboid_lines(img2, points, color):
+    for ix in range(len(points)):
+        cv2.putText(img2, "%d"%(ix), points[ix], cv2.FONT_HERSHEY_COMPLEX, 0.5, color)
     cv2.line(img2, points[0], points[1], color)
     cv2.line(img2, points[1], points[2], color)
     cv2.line(img2, points[3], points[2], color)
@@ -437,7 +455,8 @@ if __name__ == '__main__':
     factor_depth = 10000
 
     # LOAD FILES IN DIR
-    dir_files = glob.glob("%s/*.jpg"%(sample_dir))[:2]
+    n_samples = 10 # 2
+    dir_files = glob.glob("%s/*.jpg"%(sample_dir))[:n_samples]  #[1000:1000+n_samples]
     total_files = len(dir_files)
     print("%s folder: %d images"%(sample_dir, total_files))
     for fx,file in enumerate(dir_files):
@@ -478,6 +497,8 @@ if __name__ == '__main__':
             ANNOT_ID += 1
             cls = od['cls'].lower().replace("_16k","")
             polygons = od['polygons']
+            # print(polygons)
+            # break
             cls_idx = CLASSES_INDEX[cls]
             meta_data = {
                 'center': od['center'].tolist(),
@@ -491,18 +512,23 @@ if __name__ == '__main__':
         img_height, img_width = img.shape[:2]
         img_name = img_file.replace(ROOT_DIR, "").strip("/")
         depth_name = depth_file.replace(ROOT_DIR, "").strip("/")
-        coco_annot.add_image(IMG_ID, img_width, img_height, img_name, depth_name, factor_depth)
+        meta_data = {
+            "depth_file_name": depth_name,
+            "factor_depth": factor_depth
+        }
+        coco_annot.add_image(IMG_ID, img_width, img_height, img_name, meta_data=meta_data)
 
         print("Loaded %d of %d (%s)"%(fx+1, total_files, sample_dir))
 
         # # """VISUALIZE"""
-        # visualize_pose(img, label, object_data, points, intrinsic_matrix)
-        # visualize_proj_cuboid(img, object_data)
+        visualize_pose(img, label, object_data, points, intrinsic_matrix)
+        visualize_proj_cuboid(img, object_data)
         # cv2.imshow("img", img)
         # cv2.imshow("seg", label)
-        # cv2.waitKey(0)
+        cv2.waitKey(0)
         
         # depth = cv2.imread(depth_file, cv2.IMREAD_UNCHANGED)
         # render_depth_pointcloud(img, depth, object_data, points, intrinsic_matrix, factor_depth)
     
-    coco_annot.save("coco_fat_debug.json")
+    # n_samples = "all"
+    # coco_annot.save("coco_fat_debug_%s.json"%(n_samples))
